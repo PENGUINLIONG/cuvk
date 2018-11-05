@@ -8,16 +8,17 @@ L_CUVK_BEGIN_
 // Dispatch deformation of bacteria using selected physical device.
 class Deformation : public ComputeShaderContextual {
 private:
-  VkCommandBuffer _com_buf;
-
-  bool create_com_buf();
+  static std::vector<LayoutBinding> _layout_binds;
 
 public:
-  std::vector<VkDescriptorSetLayoutBinding> layout_bindings() const override;
+  Deformation() = default;
+  const std::vector<LayoutBinding>& layout_binds() const override;
+
   Spirv comp_spirv() const override;
 
-  bool execute(const   Storage& deform_specs, size_t n_deform_spec,
-               L_INOUT Storage& bacs,         size_t n_bacs);
+  bool execute(const StorageBufferView& deform_specs,
+               const StorageBufferView& bacs,
+               L_OUT StorageBufferView& bacs_out);
 };
 // Collision detection.
 class CollisionDetection {
@@ -31,7 +32,16 @@ class ElasticPhysics {
 };
 // Dispatch evaluation of universe images using selected physical device.
 class Evaluation : public GraphicsShaderContextual {
-  std::vector<VkDescriptorSetLayoutBinding> layout_bindings() const override;
+private:
+  static std::vector<LayoutBinding> _layout_binds;
+  static std::vector<Binding> _in_binds;
+  static std::vector<Attribute> _in_attrs;
+
+public:
+  const std::vector<LayoutBinding>& layout_binds() const override;
+  const std::vector<Binding>& in_binds() const override;
+  const std::vector<Attribute>& in_attrs() const override;
+
   Spirv vert_spirv() const override;
   Spirv geom_spirv() const override;
   Spirv frag_spirv() const override;

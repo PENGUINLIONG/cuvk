@@ -5,14 +5,20 @@ find_package(vulkan REQUIRED)
 find_package(png REQUIRED)
 
 message("Project 'CUVK':")
-message("   C++: ${CMAKE_CXX_COMPILER}")
-message("   Source: ${cuvk_SOURCE_DIR}")
-message("   Vulkan: ${Vulkan_INCLUDE_DIR}")
-message("      PNG: ${PNG_INCLUDE_DIR}")
+message("           C++: ${CMAKE_CXX_COMPILER}")
+message("        Source: ${cuvk_SOURCE_DIR}")
+message("        Vulkan: ${Vulkan_INCLUDE_DIR}")
+message("           PNG: ${PNG_INCLUDE_DIR}")
+message(" Binary Output: ${CMAKE_CURRENT_BINARY_DIR}")
 message("")
 
 aux_source_directory(src/cuvk DIR_SRCS)
 
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/deform.comp.spv
+          ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.vert.spv
+          ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.geom.spv
+          ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.frag.spv
+     DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/assets/shaders)
 
 add_executable(cuvk ${DIR_SRCS})
 target_include_directories(cuvk PRIVATE include
