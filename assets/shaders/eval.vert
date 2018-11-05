@@ -11,8 +11,8 @@ precision mediump float;
 //
 // Type Definitions
 // ----------------
-//  Bacteria descriptors.
-struct Bac {
+//  Bacterium descriptors.
+struct Bacterium {
   // Center of the cell.
   vec2 pos;
   // Size (half length excluding the round tip, radius) of the bacterium.
@@ -49,13 +49,13 @@ in int univ;
 //
 // Outputs
 // -------
-//  Bacteria.
+//  Bacterium.
 layout(location=4)
-out Bac bac;
+out Bacterium bac;
 //L
 
 
 
 void main() {
-  bac = Bac(pos, size, orient, univ);
+  bac = Bacterium(pos, size, orient, univ);
 }

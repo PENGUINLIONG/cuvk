@@ -20,8 +20,8 @@ precision mediump float;
 //
 // Type Definitions
 // ----------------
-//  Bacteria descriptors.
-struct Bac {
+//  Bacterium descriptors.
+struct Bacterium {
   // Center of the cell.
   vec2 pos;
   // Size (half length excluding the round tip, radius) of the bacterium.
@@ -42,7 +42,7 @@ layout(points)
 in;
 //  Bacterium.
 layout(location=4)
-in Bac bacs[];
+in Bacterium bacs[];
 //L
 
 
@@ -64,7 +64,7 @@ vec4 calc_pos(mat2 rotate, vec2 orig, vec2 offset) {
 }
 
 void main() {
-  Bac bac = bacs[0];
+  Bacterium bac = bacs[0];
   float len = bac.size.x;
   float r = bac.size.y;
   float trig_45_r = 0.70710678118654752440084436210485 * r;

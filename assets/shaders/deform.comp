@@ -28,14 +28,14 @@ precision mediump float;
 //  the range of change, and the number of steps to be taken.
 struct DeformSpecs {
   // Translation in x, y directions.
-  vec2 tr;
+  vec2 translate;
   // Stretch coefficient.
-  vec2 st;
+  vec2 stretch;
   // Angle of rotation in radian.
-  float rt;
+  float rotate;
 };
-//  Bacteria descriptors.
-struct Bac {
+//  Bacterium descriptors.
+struct Bacterium {
   // Center of the cell.
   vec2 pos;
   // Size (half length excluding the round tip, radius) of the bacterium.
@@ -54,19 +54,14 @@ struct Bac {
 // -----------------
 //  All combinations of deformation specs. Indexed in column-major order,
 //  sequentially translation, rotation and stretch.
-layout(binding=0)
+layout(std430, binding=0) readonly
 buffer deform_specs_buf {
   DeformSpecs[] deform_specs;
 };
-//  Bacteria from all the universes. 
-layout(binding=1)
+//  Bacterium from all the universes. 
+layout(std430, binding=1)
 buffer bacs_buf {
-  Bac[] bacs;
-};
-//  Bacteria output. 
-layout(binding=2)
-buffer bacs_out_buf {
-  Bac[] bacs_out;
+  Bacterium[] bacs;
 };
 //L
 
@@ -77,10 +72,10 @@ void main() {
   uint bac_idx = gl_GlobalInvocationID.y;
 
   DeformSpecs spec = deform_specs[deform_idx];
-  Bac bac = bacs[bac_idx];
+  Bacterium bac = bacs[bac_idx];
 
-  bac.pos += spec.tr;
-  bac.size *= spec.st;
-  bac.orient += spec.rt;
-  bacs_out[bac_idx] = bac;
+  bac.pos += spec.translate;
+  bac.size *= spec.stretch;
+  bac.orient += spec.rotate;
+  bacs[bac_idx] = bac;
 }
