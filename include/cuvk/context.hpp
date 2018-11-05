@@ -2,7 +2,6 @@
 #include "cuvk/comdef.hpp"
 #include <array>
 #include <string>
-#include <cstddef>
 #include <vector>
 #include <type_traits>
 #include <vulkan/vulkan.h>
@@ -15,27 +14,17 @@ class Context;
 struct DispatcherEntry;
 class Dispatcher;
 
-// Deformation specs. Same definition as in shader.
-struct DeformSpecs {
-  std::array<float, 2> tr;
-  std::array<float, 2> st;
-  float rt;
-};
-// Bacteria descriptors. Same definition as in shader.
-struct Bac {
-  std::array<float, 2> pos;
-  std::array<float, 2> size;
-  float orient;
-  int univ;
-};
 
 struct PhysicalDeviceInfo {
-  VkPhysicalDevice handle;
-  std::string name;
-  std::string ty;
+  VkPhysicalDevice phys_dev;
+  VkPhysicalDeviceProperties props;
 };
 
-
+enum class BufferType {
+  UniformBuffer,
+  StorageBuffer,
+  TexelBuffer,
+};
 
 enum class ExecType {
   Compute, Graphics
@@ -45,7 +34,7 @@ enum class ExecType {
 
 class Contextual;
 
-class Context : std::enable_shared_from_this<Context> {
+class Context : public std::enable_shared_from_this<Context> {
   friend Contextual;
 private:
   // Vulkan RT version.
@@ -62,6 +51,11 @@ private:
 
   std::vector<Contextual*> _rg;
 
+#ifndef NDEBUG
+  VkDebugUtilsMessengerEXT _cb;
+#endif // !NDEBUG
+
+  VkPhysicalDeviceLimits _limits;
 
   bool create_inst();
   bool create_cmd_pools();
@@ -78,12 +72,17 @@ public:
   bool require_min_ver(uint32_t ver);
   // Enumerate all devices that have queues supporting both computing and
   // graphics.
-  std::vector<PhysicalDeviceInfo> enum_phys_dev() const;
+  const std::vector<PhysicalDeviceInfo> enum_phys_dev() const;
   // Select a specific physical device and create coresponding logical device
   // and queues.
   bool select_phys_dev(const PhysicalDeviceInfo& pdi);
 
+  // Destruct the device bound to vulkan instance and related functionalities.
+  void invalidate();
+
   VkDevice dev() const;
+
+  const VkPhysicalDeviceLimits& limits() const;
 
   uint32_t find_mem_type(VkMemoryPropertyFlags flags) const;
   const std::vector<VkMemoryHeap>& get_mem_heap() const;
@@ -92,13 +91,23 @@ public:
   VkQueue get_queue(ExecType ty) const;
   VkCommandPool get_cmd_pool(ExecType ty) const;
 
+  // The aligned size of a length of memory on the current physical device.
+  size_t get_aligned_size(size_t size, BufferType ty) const;
+
   template<typename T,
            typename _ = std::enable_if<std::is_base_of_v<Contextual, T>>,
            typename ... TArgs>
   std::shared_ptr<T> make_contextual(TArgs&& ... args) {
-    auto rv = std::make_shared<T>(std::forward<TArgs>(args), ...);
-    _rg.push_back(rv);
+    auto rv = std::make_shared<T>(std::forward<TArgs>(args) ...);
     rv->_ctxt = shared_from_this();
+    // Invalidate the context if the context is unable to allocate resoureces
+    // for the new contextual object.
+    if (!rv->context_changed()) {
+      invalidate();
+      return nullptr;
+    }
+    _rg.push_back(rv.get());
+
     return rv;
   }
 };
@@ -121,17 +130,17 @@ public:
   bool validate_ctxt() const;
   // Get the context currently bound.
   const Context& ctxt() const;
+  Context& ctxt();
 
   // Update event when context is about to change. The bound device will be
   // destroyed soon after this event is fired. Implementations must ensure this
   // event handler is idempotent, that is, triggering this event for multiple
-  // times will have the same effect as firing it once.
+  // times will have the same effect as firing it once. This method must not
+  // fail.
   virtual bool context_changing() = 0;
   // Update event when context has changed, like when the selected device has
   // changed. Return `true` if no error occurred. If any error occurred durring
-  // context change, the context will try to fall back to the previous device
-  // setting, and this event will also be triggered. If any error occurred
-  // during fall back, CUVK will panic. 
+  // context change, the context will become invalid.
   virtual bool context_changed() = 0;
 };
 

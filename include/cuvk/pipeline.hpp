@@ -2,41 +2,44 @@
 #include "cuvk/comdef.hpp"
 #include "cuvk/context.hpp"
 #include <vector>
-#include <cstddef>
-#include <array>
 #include <vulkan/vulkan.h>
 
 L_CUVK_BEGIN_
 
 struct Spirv {
+  std::vector<uint32_t> _code;
 public:
-  std::vector<uint32_t> code;
-  Spirv() : code() { }
-  Spirv(const char* spirv, size_t len) : code((len + 3) / 4) {
-    // TODO: Optimize `memcpy` later.
-    std::memcpy((void*)code.data(), spirv, len);
-  }
+  Spirv();
+  Spirv(std::vector<uint32_t>&& code);
+  Spirv(const char* spirv, size_t len);
+
+  size_t size() const;
+  const uint32_t* data() const;
 };
 
 class PipelineContextual : public Contextual {
 protected:
   VkDescriptorSetLayout _desc_set_layout;
+  VkDescriptorPool _desc_pool;
+  VkDescriptorSet _desc_set;
   VkRenderPass _pass;
   VkPipelineLayout _pl_layout;
   VkPipeline _pl;
 
   bool create_shader_module(const Spirv& spv, L_OUT VkShaderModule& mod) const;
 
-  virtual std::vector<VkDescriptorSetLayoutBinding> layout_bindings() const = 0;
-
   virtual bool create_pl() = 0;
   virtual void destroy_pl() = 0;
 
 public:
-  PipelineContextual(const Context& ctxt);
+  using LayoutBinding = VkDescriptorSetLayoutBinding;
 
-  bool context_changing() override final;
-  bool context_changed() override final;
+  PipelineContextual() = default;
+
+  virtual const std::vector<LayoutBinding>& layout_binds() const = 0;
+
+  bool context_changing() override;
+  bool context_changed() override;
 };
 
 // Contextual objects that make use of shaders and pipelines.
@@ -48,7 +51,7 @@ private:
   void destroy_pl() override final;
 
 public:
-  ComputeShaderContextual(const Context& ctxt);
+  ComputeShaderContextual() = default;
 
   virtual Spirv comp_spirv() const = 0;
 };
@@ -66,11 +69,13 @@ private:
   void destroy_pl() override final;
 
 public:
-  GraphicsShaderContextual(const Context& ctxt,
-                           uint32_t rows, uint32_t cols, uint32_t layers);
+  using Binding = VkVertexInputBindingDescription;
+  using Attribute = VkVertexInputAttributeDescription;
 
-  std::vector<VkVertexInputBindingDescription> in_binds() const;
-  std::vector<VkVertexInputAttributeDescription> in_descs() const;
+  GraphicsShaderContextual(uint32_t rows, uint32_t cols, uint32_t layers);
+
+  virtual const std::vector<Binding>& in_binds() const = 0;
+  virtual const std::vector<Attribute>& in_attrs() const = 0;
 
   virtual Spirv vert_spirv() const = 0;
   virtual Spirv geom_spirv() const = 0;

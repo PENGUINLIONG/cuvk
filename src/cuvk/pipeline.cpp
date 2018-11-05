@@ -1,18 +1,34 @@
 #include "cuvk/pipeline.hpp"
 #include "cuvk/logger.hpp"
+#include <map>
 
 L_CUVK_BEGIN_
 
-PipelineContextual::PipelineContextual(const Context& ctxt) { }
+Spirv::Spirv() : _code() {}
+Spirv::Spirv(std::vector<uint32_t>&& code) :
+  _code(std::forward<std::vector<uint32_t>>(code)) {}
+Spirv::Spirv(const char* spirv, size_t len) : _code() {
+  _code.resize((len + 3) / 4);
+  // TODO: Optimize `memcpy` later.
+  std::memcpy((void*)_code.data(), spirv, len);
+}
+
+size_t Spirv::size() const {
+  return _code.size() * sizeof(uint32_t);
+}
+const uint32_t* Spirv::data() const {
+  return _code.data();
+}
 
 bool PipelineContextual::create_shader_module(
     const Spirv& spv, L_OUT VkShaderModule& mod) const {
   VkShaderModuleCreateInfo smci{};
   smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-  smci.codeSize = spv.code.size();
-  smci.pCode = spv.code.data();
+  smci.codeSize = spv.size();
+  smci.pCode = spv.data();
 
   if (L_VK <- vkCreateShaderModule(ctxt().dev(), &smci, nullptr, &mod)) {
+    LOG.error("unable to instantiate shader module");
     return false;
   }
   return true;
@@ -21,7 +37,7 @@ bool PipelineContextual::create_shader_module(
 bool PipelineContextual::create_pl() {
   auto dev = ctxt().dev();
 
-  auto dslbs = layout_bindings();
+  auto dslbs = layout_binds();
   VkDescriptorSetLayoutCreateInfo dslci{};
   dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
   dslci.pBindings = dslbs.data();
@@ -29,6 +45,7 @@ bool PipelineContextual::create_pl() {
 
   if (L_VK <- vkCreateDescriptorSetLayout(
       dev, &dslci, nullptr, &_desc_set_layout)) {
+    LOG.error("unable to create descriptor set layout");
     return false;
   }
 
@@ -38,12 +55,61 @@ bool PipelineContextual::create_pl() {
   plci.pSetLayouts = &_desc_set_layout;
 
   if (L_VK <- vkCreatePipelineLayout(dev, &plci, nullptr, &_pl_layout)) {
+    LOG.error("unable to create pipeline layout");
     return false;
   }
+
+  // Create descriptor sets.
+
+  // Collect the number of each type of descriptors.
+  std::map<VkDescriptorType, uint32_t> desc_count_map;
+  for (const auto& bind : dslbs) {
+    auto it = desc_count_map.find(bind.descriptorType);
+    if (it == desc_count_map.end()) {
+      desc_count_map.emplace(std::make_pair(bind.descriptorType, bind.descriptorCount));
+    } else {
+      it->second += bind.descriptorCount;
+    }
+  }
+  std::vector<VkDescriptorPoolSize> dpss;
+  for (const auto& pair : desc_count_map) {
+    dpss.emplace_back(VkDescriptorPoolSize{ pair.first, pair.second });
+  }
+
+  VkDescriptorPoolCreateInfo dpci {};
+  dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  dpci.maxSets = 1;
+  dpci.poolSizeCount = static_cast<uint32_t>(dpss.size());
+  dpci.pPoolSizes = dpss.data();
+
+  if (L_VK <- vkCreateDescriptorPool(dev, &dpci, nullptr, &_desc_pool)) {
+    LOG.error("unable to create descriptor pool");
+    return false;
+  }
+
+  VkDescriptorSetAllocateInfo dsai {};
+  dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  dsai.descriptorPool = _desc_pool;
+  dsai.descriptorSetCount = 1;
+  dsai.pSetLayouts = &_desc_set_layout;
+
+  if (L_VK <- vkAllocateDescriptorSets(dev, &dsai, &_desc_set)) {
+    LOG.error("unable to allocate descriptor sets");
+    return false;
+  }
+
+  return true;
 }
 void PipelineContextual::destroy_pl() {
   auto dev = ctxt().dev();
 
+  // Once `_desc_set` is allocated, it doesn't need to be released, as we didn't
+  // turn the `VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT` flag on.
+  _desc_set = VK_NULL_HANDLE;
+  if (_desc_pool) {
+    vkDestroyDescriptorPool(dev, _desc_pool, nullptr);
+    _desc_pool = VK_NULL_HANDLE;
+  }
   if (_pl_layout) {
     vkDestroyPipelineLayout(dev, _pl_layout, nullptr);
     _pl_layout = VK_NULL_HANDLE;
@@ -64,20 +130,13 @@ bool PipelineContextual::context_changed() {
 
 
 
-ComputeShaderContextual::ComputeShaderContextual(const Context& ctxt) :
-  PipelineContextual(ctxt) { }
-
 bool ComputeShaderContextual::create_pl() {
-  auto dev = ctxt().dev();
-
   if (!PipelineContextual::create_pl()) {
     return false;
   }
-
   if (!create_shader_module(comp_spirv(), _mod)) {
     return false;
   }
-
   VkComputePipelineCreateInfo cpci{};
   cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
   cpci.layout = _pl_layout;
@@ -86,9 +145,14 @@ bool ComputeShaderContextual::create_pl() {
   cpci.stage.module = _mod;
   cpci.stage.pName = "main";
 
-  // TODO:: (penguinliong) Use cache.
+  // TODO: (penguinliong) Use cache.
   VkPipelineCache pl_cache = VK_NULL_HANDLE;
-  L_VK <- vkCreateComputePipelines(dev, pl_cache, 1, &cpci, nullptr, &_pl);
+  if (L_VK <- vkCreateComputePipelines(ctxt().dev(),
+    pl_cache, 1, &cpci, nullptr, &_pl)) {
+    LOG.error("unable to create compute pipeline");
+    return false;
+  }
+  return true;
 }
 void ComputeShaderContextual::destroy_pl() {
   auto dev = ctxt().dev();
@@ -106,9 +170,9 @@ void ComputeShaderContextual::destroy_pl() {
 
 
 
-GraphicsShaderContextual::GraphicsShaderContextual(const Context& ctxt,
-    uint32_t rows, uint32_t cols, uint32_t layers) :
-  PipelineContextual(ctxt), _rows(rows), _cols(cols), _layers(layers) { }
+GraphicsShaderContextual::GraphicsShaderContextual(
+  uint32_t rows, uint32_t cols, uint32_t layers) :
+  _rows(rows), _cols(cols), _layers(layers) { }
 
 bool GraphicsShaderContextual::create_pass() {
   // Create render pass with attachment (output image) info. We have no
@@ -121,7 +185,8 @@ bool GraphicsShaderContextual::create_pass() {
   rpci.subpassCount = 1;
   rpci.pSubpasses = &sd;
 
-  if (L_VK <- vkCreateRenderPass(ctxt().dev, &rpci, nullptr, &_pass)) {
+  if (L_VK <- vkCreateRenderPass(ctxt().dev(), &rpci, nullptr, &_pass)) {
+    LOG.error("unable to create render pass");
     return false;
   }
 }
@@ -155,17 +220,8 @@ bool GraphicsShaderContextual::create_pl() {
   if (!create_pass()) { return false; }
 
   // Vertex inputs.
-  std::array<VkVertexInputBindingDescription, 1> vibds {
-    VkVertexInputBindingDescription
-    { 0, 6 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX },
-  };
-  std::array<VkVertexInputAttributeDescription, 4> viads {
-    VkVertexInputAttributeDescription
-    { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0                 }, // pos
-    { 1, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(float) }, // size
-    { 2, 0, VK_FORMAT_R32_SFLOAT,    4 * sizeof(float) }, // orient
-    { 3, 0, VK_FORMAT_R32_UINT,      5 * sizeof(float) }, // univ
-  };
+  auto vibds = in_binds();
+  auto viads = in_attrs();
 
   VkPipelineVertexInputStateCreateInfo pvisci{};
   pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -225,8 +281,10 @@ bool GraphicsShaderContextual::create_pl() {
   // TODO: (penguinliong) Do we need to use cache?
   if (L_VK <-vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1,
       &gpci, nullptr, &_pl)) {
+    LOG.error("unable to create graphics pipeline");
     return false;
   }
+  return true;
 }
 void GraphicsShaderContextual::destroy_pl() {
   auto dev = ctxt().dev();

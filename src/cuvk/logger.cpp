@@ -29,7 +29,9 @@ namespace detail {
           logger._msgs.pop();
         }
       }
+#ifdef NDEBUG
       std::this_thread::sleep_for(100ms);
+#endif // NDEBUG
     }
   }
 }
@@ -53,7 +55,7 @@ VkResult VkCheck::operator<(int result) const {
   result = -result;
   if (result == VK_SUCCESS) return (VkResult)result;
   bool err = result < 0;
-  const char* msg;
+  const char* msg = nullptr;
   switch (result) {
   case VK_NOT_READY: msg = "not ready"; break;
   case VK_TIMEOUT: msg = "timeout"; break;
@@ -75,11 +77,16 @@ VkResult VkCheck::operator<(int result) const {
   case VK_ERROR_OUT_OF_POOL_MEMORY: msg = "out of pool memory"; break;
   case VK_ERROR_INVALID_EXTERNAL_HANDLE: msg = "invalid external handle"; break;
   }
-  if (err) {
-    LOG.error(fmt::format("bad vulkan result: {}", msg));
+  if (msg != nullptr) {
+    if (err) {
+      LOG.error(fmt::format("bad vulkan result: {}", msg));
+    } else {
+      LOG.warning(fmt::format("suspecious vulkan result: {}", msg));
+    }
   } else {
-    LOG.warning(fmt::format("suspecious vulkan result: {}", msg));
+    LOG.error("unknown error {}", result);
   }
+  LOG.trace("See {}:{}", _file, _line);
   return (VkResult)result;
 }
 
