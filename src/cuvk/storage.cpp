@@ -1,5 +1,6 @@
 #include "cuvk/storage.hpp"
 #include "cuvk/logger.hpp"
+#include <exception>
 
 L_CUVK_BEGIN_
 
@@ -59,6 +60,7 @@ const std::vector<VkMemoryAllocateFlags>& get_fallbacks(StorageOptimization opt)
   case cuvk::StorageOptimization::DeviceOnly:
     return DEVICE_ONLY_FALLBACKS;
   }
+  std::terminate(); // Impossible branch.
 }
 
 

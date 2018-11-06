@@ -322,6 +322,7 @@ size_t Context::get_aligned_size(size_t size, BufferType ty) const {
   case cuvk::BufferType::TexelBuffer:
     return min_multiple(size, _limits.minTexelBufferOffsetAlignment);
   }
+  std::terminate(); // Impossible branch.
 }
 
 bool Context::create_inst() {
