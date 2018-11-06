@@ -30,6 +30,9 @@ std::vector<Deformation::LayoutBinding> Deformation::_layout_binds = {
   // Bac[] bacs
   { 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+  // Bac[] bacs
+  { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
 };
 
 const std::vector<Deformation::LayoutBinding>& Deformation::layout_binds() const {
@@ -112,9 +115,10 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
   }
 
   /* Update buffer descriptor sets. */ {
-    std::array<VkWriteDescriptorSet, 2> wdss {};
+    std::array<VkWriteDescriptorSet, 3> wdss {};
     auto& wds_specs = wdss[0];
     auto& wds_bacs = wdss[1];
+    auto& wds_bacs_out = wdss[2];
 
     VkWriteDescriptorSet wds_template {};
     wds_template.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -140,6 +144,15 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
     wds_bacs.dstBinding = 1;
     wds_bacs.pBufferInfo = &dbi_bacs;
 
+    VkDescriptorBufferInfo dbi_bacs_out {};
+    dbi_bacs_out.buffer = bacs_out.buf();
+    dbi_bacs_out.offset = bacs_out.offset();
+    dbi_bacs_out.range = bacs_out.size();
+
+    wds_bacs_out = wds_template;
+    wds_bacs_out.dstBinding = 2;
+    wds_bacs_out.pBufferInfo = &dbi_bacs_out;
+
     vkUpdateDescriptorSets(dev, (uint32_t)wdss.size(), wdss.data(), 0, nullptr);
   }
 
@@ -150,41 +163,16 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
   }
 
   /* Dispatch deformation. */ {
-    vkCmdDispatch(cmd_buf, nspec, nbac, 0);
-  }
-
-  /* Sync again to transfer deformed bacteria data to host-cached memory. */ {
-    VkBufferMemoryBarrier bmb {};
-    bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    bmb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    bmb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bmb.buffer = bacs.buf();
-    bmb.offset = bacs.offset();
-    bmb.size = bacs.size();
-
-    vkCmdPipelineBarrier(cmd_buf,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      0,
-      0, nullptr,
-      1, &bmb,
-      0, nullptr);
-  }
-
-  /* Copy results to output buffer. */ {
-    VkBufferCopy bc {};
-    bc.srcOffset = bacs.offset();
-    bc.dstOffset = bacs_out.offset();
-    bc.size = bacs.size();
-    vkCmdCopyBuffer(cmd_buf, bacs.buf(), bacs_out.buf(), 1, &bc);
+    vkCmdDispatch(cmd_buf,
+      static_cast<uint32_t>(nspec),
+      static_cast<uint32_t>(nbac),
+      1);
   }
 
   /* Sync for host to read. */ {
     VkBufferMemoryBarrier bmb {};
     bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    bmb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    bmb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     bmb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
     bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -193,7 +181,7 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
     bmb.size = bacs_out.size();
 
     vkCmdPipelineBarrier(cmd_buf,
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
       VK_PIPELINE_STAGE_HOST_BIT,
       0,
       0, nullptr,
@@ -201,9 +189,10 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
       0, nullptr);
   }
 
-  // Finish recording.
-  if (L_VK <- vkEndCommandBuffer(cmd_buf)) {
-    LOG.error("unable to finish command recording");
+  /* Finish recording. */ {
+    if (L_VK <- vkEndCommandBuffer(cmd_buf)) {
+      LOG.error("unable to finish command recording");
+    }
   }
 
   /* Dispatch computing job to devices. */ {
@@ -225,12 +214,18 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
 
     VkSubmitInfo si {};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 0;
+    si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd_buf;
     si.pWaitDstStageMask = &psf;
 
-    if (L_VK <- vkQueueSubmit(ctxt().get_queue(ExecType::Compute),
-      1, &si, fence)) {
+    VkQueue queue = ctxt().get_queue(ExecType::Compute);
+
+    if (L_VK <- vkQueueWaitIdle(queue)) {
+      LOG.error("unable to wait for target queue");
+      return false;
+    }
+
+    if (L_VK <- vkQueueSubmit(queue, 1, &si, fence)) {
       LOG.error("unable to submit commands to device");
       return false;
     }
@@ -287,6 +282,41 @@ Spirv Evaluation::frag_spirv() const {
 bool Evaluation::execute(const Storage& bacs,     size_t n_bacs,
                          L_OUT Storage& diff_map,
                          L_OUT Storage& costs) {
+  auto dev = ctxt().dev();
+  VkCommandBuffer cmd_buf;
+
+  /* Allocate command buffer. */ {
+    VkCommandBufferAllocateInfo cbai {};
+    cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    cbai.commandPool = ctxt().get_cmd_pool(ExecType::Graphics);
+
+    if (L_VK <- vkAllocateCommandBuffers(dev, &cbai, &cmd_buf)) {
+      LOG.error("unable to allocate command buffer for evaluation");
+      return false;
+    }
+  }
+
+  /* Start recording commands. */ {
+    VkCommandBufferBeginInfo cbbi {};
+    cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (L_VK <- vkBeginCommandBuffer(cmd_buf, &cbbi)) {
+      LOG.error("unable to start recording commands");
+      return false;
+    }
+  }
+
+  /* Sync to ensure all bacteria data and the real universe are written to
+     device memory. */
+
+  /* Sync to ensure shader has written simulated universes and costs. */
+
+  /*  */
+
+
   return false;
 }
 L_CUVK_END_

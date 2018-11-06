@@ -112,37 +112,59 @@ bool Storage::context_changed() {
 }
 
 bool Storage::send(const void* data, size_t dst_offset, size_t size) {
+  auto dev = ctxt().dev();
   void* dst;
-  if (L_VK <- vkMapMemory(ctxt().dev(), dev_mem(), dst_offset, size, 0, &dst)) {
+  if (L_VK <- vkMapMemory(dev, _dev_mem, dst_offset, size, 0, &dst)) {
     LOG.error("unable to map memory for sending");
     return false;
   }
   std::memcpy(dst, data, size);
   
-  vkUnmapMemory(ctxt().dev(), dev_mem());
+  vkUnmapMemory(dev, _dev_mem);
+
+  // Flush memory after write, if the memory is not coherent.
+  if (!(_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+    VkMappedMemoryRange mmr {};
+    mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    mmr.memory = _dev_mem;
+    // FIXME: (penguinliong) The offset also follow the same rule as size.
+    mmr.offset = dst_offset;
+    mmr.size = size;
+    if (L_VK <- vkFlushMappedMemoryRanges(dev, 1, &mmr)) {
+      LOG.error("unable to flush data to device");
+      return false;
+    }
+  }
   return true;
 }
 bool Storage::fetch(L_OUT void* data, size_t src_offset, size_t size) {
+  auto dev = ctxt().dev();
+  // Invalidate mapped memory before read if the memory is not coherent.
+  if ((_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+    VkMappedMemoryRange mmr {};
+    mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+    mmr.memory = _dev_mem;
+    mmr.offset = src_offset;
+    if (size < ctxt().limits().nonCoherentAtomSize) {
+      mmr.size = VK_WHOLE_SIZE;
+    } else {
+      mmr.size = size;
+    }
+    if (L_VK <- vkInvalidateMappedMemoryRanges(dev, 1, &mmr)) {
+      LOG.error("unable to update mapped memory");
+      return false;
+    }
+  }
+
   void* src;
-  if (L_VK <- vkMapMemory(ctxt().dev(), dev_mem(), src_offset, size, 0, &src)) {
+  if (L_VK <- vkMapMemory(dev, _dev_mem, src_offset, size, 0, &src)) {
     LOG.error("unable to map memory for fetching");
     return false;
   }
   std::memcpy(data, src, size);
 
-  vkUnmapMemory(ctxt().dev(), dev_mem());
+  vkUnmapMemory(dev, _dev_mem);
   return true;
-}
-bool Storage::invalidate_mapped(size_t offset, size_t size) {
-  VkMappedMemoryRange mmr {};
-  mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-  mmr.memory = _dev_mem;
-  mmr.offset = offset;
-  mmr.size = size;
-  if (L_VK <- vkInvalidateMappedMemoryRanges(ctxt().dev(), 1, &mmr)) {
-    LOG.error("unable to update mapped memory");
-    return false;
-  }
 }
 
 StorageBufferView::StorageBufferView(std::shared_ptr<const StorageBuffer> buf,

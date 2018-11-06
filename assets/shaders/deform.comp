@@ -63,6 +63,11 @@ layout(std430, binding=1)
 buffer bacs_buf {
   Bacterium[] bacs;
 };
+//  Bacterium from all the universes. 
+layout(std430, binding=2)
+buffer bacs_out_buf {
+  Bacterium[] bacs_out;
+};
 //L
 
 
@@ -77,5 +82,5 @@ void main() {
   bac.pos += spec.translate;
   bac.size *= spec.stretch;
   bac.orient += spec.rotate;
-  bacs[bac_idx] = bac;
+  bacs_out[bac_idx] = bac;
 }

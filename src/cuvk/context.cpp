@@ -346,9 +346,9 @@ bool Context::create_inst() {
 #ifndef NDEBUG
   std::array<const char*, 1> vlayer = { "VK_LAYER_LUNARG_standard_validation" };
   std::array<const char*, 1> vext = { VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
-  ici.enabledLayerCount = vlayer.size();
+  ici.enabledLayerCount = static_cast<uint32_t>(vlayer.size());
   ici.ppEnabledLayerNames = vlayer.data();
-  ici.enabledExtensionCount = vext.size();
+  ici.enabledExtensionCount = static_cast<uint32_t>(vext.size());
   ici.ppEnabledExtensionNames = vext.data();
 #endif // !NDEBUG
 

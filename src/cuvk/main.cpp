@@ -33,10 +33,10 @@ int main() {
 
   auto deform_in_buf = ctxt->make_contextual<StorageBuffer>(
     specs_aligned + bacs_aligned, ExecType::Compute,
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   auto deform_out_buf = ctxt->make_contextual<StorageBuffer>(
     bacs_out_aligned, ExecType::Compute,
-    VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
   auto deform_in_mem = ctxt->make_contextual<Storage>(
     deform_in_buf->alloc_size(),
@@ -50,9 +50,9 @@ int main() {
 
   // Set up input data.
   DeformSpecs spec;
-  spec.rotate = 0.;
+  spec.rotate = 1.;
   spec.stretch = { 1., 1. };
-  spec.translate = { 0., 0. };
+  spec.translate = { 1., 1. };
   deform_in_mem->send(&spec, 0, sizeof(DeformSpecs));
 
   Bacterium bac;
@@ -69,7 +69,6 @@ int main() {
 
   Bacterium bac_out;
   //deform_out_mem->fetch(&bac_out, 0, sizeof(Bacterium));
-  deform_out_mem->invalidate_mapped(0, VK_WHOLE_SIZE);
   deform_out_mem->fetch(&bac_out, 0, sizeof(Bacterium));
 
   LOG.info("Deformed bactrium: orient={}, pos=({}, {}), size=({}, {})",

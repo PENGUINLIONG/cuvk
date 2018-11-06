@@ -34,9 +34,6 @@ public:
 
   bool send(const void* data, size_t dst_offset, size_t size);
   bool fetch(L_OUT void* data, size_t src_offset, size_t size);
-  // Before any fetch, invalidation is required for the latest device data to
-  // reflect on host storage.
-  bool invalidate_mapped(size_t offset, size_t size);
 };
 
 
