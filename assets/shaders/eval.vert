@@ -50,7 +50,7 @@ in int univ;
 // Outputs
 // -------
 //  Bacterium.
-layout(location=4)
+layout(location=0)
 out Bacterium bac;
 //L
 

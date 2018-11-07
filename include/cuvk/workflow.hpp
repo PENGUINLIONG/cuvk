@@ -36,19 +36,27 @@ private:
   static std::vector<LayoutBinding> _layout_binds;
   static std::vector<Binding> _in_binds;
   static std::vector<Attribute> _in_attrs;
+  static std::vector<Blend> _out_blends;
+  static std::vector<Attachment> _out_attaches;
 
 public:
+  Evaluation(uint32_t rows, uint32_t cols, uint32_t layers);
   const std::vector<LayoutBinding>& layout_binds() const override;
   const std::vector<Binding>& in_binds() const override;
   const std::vector<Attribute>& in_attrs() const override;
+  const std::vector<Blend>& out_blends() const override;
+  const std::vector<Attachment>& out_attaches() const override;
 
   Spirv vert_spirv() const override;
   Spirv geom_spirv() const override;
   Spirv frag_spirv() const override;
 
-  bool execute(const Storage& bacs,     size_t n_bacs,
-               L_OUT Storage& diff_map,
-               L_OUT Storage& costs);
+  VkRenderPass create_pass() const override;
+
+  bool execute(const StorageBufferView& bacs,
+               const StorageImageView& real_univ,
+               L_OUT StorageImageView& sim_univs,
+               L_OUT StorageBufferView& costs);
 };
 
 L_CUVK_END_

@@ -193,9 +193,14 @@ bool Context::select_phys_dev(const PhysicalDeviceInfo& pdi) {
                 "to previous selection");
     return false;
   }
+  VkPhysicalDeviceFeatures pdf {};
+  pdf.geometryShader = true;
+  pdf.fragmentStoresAndAtomics = true;
+
   // Create device and queues.
   VkDeviceCreateInfo dci{};
   dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  dci.pEnabledFeatures = &pdf;
   dci.queueCreateInfoCount = 2;
   dci.pQueueCreateInfos = dqcis.data();
   if (L_VK <- vkCreateDevice(phys_dev, &dci, nullptr, &_dev)) {

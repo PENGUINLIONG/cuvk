@@ -46,6 +46,7 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
                           const StorageBufferView& bacs,
                           L_OUT StorageBufferView& bacs_out) {
   auto dev = ctxt().dev();
+  auto cmd_pool = ctxt().get_cmd_pool(ExecType::Compute);
 
   VkCommandBuffer cmd_buf;
   // Ensure that the output buffer is larger than or as large as the input
@@ -64,7 +65,7 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
-    cbai.commandPool = ctxt().get_cmd_pool(ExecType::Compute);
+    cbai.commandPool = cmd_pool;
 
     if (L_VK <- vkAllocateCommandBuffers(dev, &cbai, &cmd_buf)) {
       LOG.error("unable to allocate command buffer for deformation");
@@ -237,6 +238,7 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
 
     vkDestroyFence(dev, fence, nullptr);
   }
+  vkFreeCommandBuffers(dev, cmd_pool, 1, &cmd_buf);
 
   return true;
 }
@@ -244,9 +246,8 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
 std::vector<Evaluation::LayoutBinding> Evaluation::_layout_binds = {
   VkDescriptorSetLayoutBinding
   // image2D real_univ
-  { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_ALL, nullptr },
-  { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_ALL, nullptr },
-  { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr },
+  { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+    VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
 };
 std::vector<Evaluation::Binding> Evaluation::_in_binds = {
   VkVertexInputBindingDescription
@@ -257,8 +258,25 @@ std::vector<Evaluation::Attribute> Evaluation::_in_attrs = {
   { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0                 }, // pos
   { 1, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(float) }, // size
   { 2, 0, VK_FORMAT_R32_SFLOAT,    4 * sizeof(float) }, // orient
-  { 3, 0, VK_FORMAT_R32_UINT,      5 * sizeof(float) }, // univ
+  { 3, 0, VK_FORMAT_R32_SINT,      5 * sizeof(float) }, // univ
 };
+std::vector<Evaluation::Blend> Evaluation::_out_blends = {
+  VkPipelineColorBlendAttachmentState
+  {},
+};
+std::vector<Evaluation::Attachment> Evaluation::_out_attaches = {
+  VkAttachmentDescription
+  {
+    0, VK_FORMAT_R32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
+    VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+    VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+  },
+};
+
 
 const std::vector<Evaluation::LayoutBinding>& Evaluation::layout_binds() const {
   return _layout_binds;
@@ -268,6 +286,12 @@ const std::vector<Evaluation::Binding>& Evaluation::in_binds() const {
 }
 const std::vector<Evaluation::Attribute>& Evaluation::in_attrs() const {
   return _in_attrs;
+}
+const std::vector<Evaluation::Blend>& Evaluation::out_blends() const {
+  return _out_blends;
+}
+const std::vector<Evaluation::Attachment>& Evaluation::out_attaches() const {
+  return _out_attaches;
 }
 Spirv Evaluation::vert_spirv() const {
   return read_spirv("assets/shaders/eval.vert.spv");
@@ -279,18 +303,57 @@ Spirv Evaluation::frag_spirv() const {
   return read_spirv("assets/shaders/eval.frag.spv");
 }
 
-bool Evaluation::execute(const Storage& bacs,     size_t n_bacs,
-                         L_OUT Storage& diff_map,
-                         L_OUT Storage& costs) {
+Evaluation::Evaluation(uint32_t rows, uint32_t cols, uint32_t layers) :
+  GraphicsShaderContextual(rows, cols, layers) {
+}
+
+VkRenderPass Evaluation::create_pass() const {
+  VkRenderPass rp;
+
+  auto attaches = out_attaches();
+  VkAttachmentReference ar {};
+  ar.attachment = 0;
+  ar.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+  VkSubpassDescription sd {};
+  sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  sd.colorAttachmentCount = 1;
+  sd.pColorAttachments = &ar;
+
+  VkRenderPassCreateInfo rpci {};
+  rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  rpci.attachmentCount = attaches.size();
+  rpci.pAttachments = attaches.data();
+  rpci.subpassCount = 1;
+  rpci.pSubpasses = &sd;
+
+  if (L_VK <- vkCreateRenderPass(ctxt().dev(), &rpci, nullptr, &rp)) {
+    LOG.error("unable to create render pass");
+    return VK_NULL_HANDLE;
+  }
+  return rp;
+}
+
+bool Evaluation::execute(const StorageBufferView& bacs,
+                         const StorageImageView& real_univ,
+                         L_OUT StorageImageView& sim_univs,
+                         L_OUT StorageBufferView& costs) {
   auto dev = ctxt().dev();
+  auto cmd_pool = ctxt().get_cmd_pool(ExecType::Graphics);
+
+
   VkCommandBuffer cmd_buf;
+  VkFramebuffer f;
+
+  VkExtent2D extent = real_univ.extent();
+  uint32_t nlayer = sim_univs.nlayer();
 
   /* Allocate command buffer. */ {
     VkCommandBufferAllocateInfo cbai {};
     cbai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
-    cbai.commandPool = ctxt().get_cmd_pool(ExecType::Graphics);
+    cbai.commandPool = cmd_pool;
 
     if (L_VK <- vkAllocateCommandBuffers(dev, &cbai, &cmd_buf)) {
       LOG.error("unable to allocate command buffer for evaluation");
@@ -310,12 +373,144 @@ bool Evaluation::execute(const Storage& bacs,     size_t n_bacs,
   }
 
   /* Sync to ensure all bacteria data and the real universe are written to
-     device memory. */
+     device memory. */ {
+    VkBufferMemoryBarrier bmb {};
+    bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bmb.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    bmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bmb.buffer = bacs.buf();
+    bmb.offset = bacs.offset();
+    bmb.size = bacs.size();
+  
+    VkImageMemoryBarrier imb {};
+    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imb.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imb.image = real_univ.img();
+    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    imb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-  /* Sync to ensure shader has written simulated universes and costs. */
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_HOST_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      0, // No dependency flags.
+      0, nullptr,
+      1, &bmb,
+      1, &imb);
+  }
 
-  /*  */
+  /* Update description. */ {
+    VkDescriptorImageInfo dii {};
+    dii.imageView = real_univ.img_view();
+    dii.imageLayout = real_univ.layout();
 
+    VkWriteDescriptorSet wds {};
+    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.dstSet = _desc_set;
+    wds.descriptorCount = 1;
+    wds.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    wds.dstBinding = 0;
+    wds.pImageInfo = &dii;
+
+    vkUpdateDescriptorSets(dev, 1, &wds, 0, nullptr);
+  }
+
+  /* Prepare framebuffer. */ {
+    VkImageView iv = sim_univs.img_view();
+
+    VkFramebufferCreateInfo fci {};
+    fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    fci.renderPass = render_pass();
+    fci.attachmentCount = 1;
+    fci.pAttachments = &iv;
+    fci.width = extent.width;
+    fci.height = extent.height;
+    fci.layers = nlayer;
+
+    vkCreateFramebuffer(dev, &fci, nullptr, &f);
+  }
+
+  /* Record render pass. */ {
+
+    std::array<VkClearValue, 2> cv;
+    cv[0].color = { { 0., 0., 0., 1. } };
+    cv[1].depthStencil = { 1., 0 };
+
+    VkRenderPassBeginInfo rpbi {};
+    rpbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rpbi.renderPass = render_pass();
+    rpbi.renderArea.extent.width = sim_univs.extent().width;
+    rpbi.renderArea.extent.height = sim_univs.extent().height;
+    rpbi.clearValueCount = cv.size();
+    rpbi.pClearValues = cv.data();
+
+    vkCmdBeginRenderPass(cmd_buf, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport {};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.;
+    viewport.maxDepth = 1.;
+
+    vkCmdSetViewport(cmd_buf, 0, 1, &viewport);
+
+    VkRect2D scissor = {};
+    scissor.extent.width = extent.width;
+    scissor.extent.height = extent.height;
+    scissor.offset.x = 0;
+    scissor.offset.y = 0;
+
+    vkCmdSetScissor(cmd_buf, 0, 1, &scissor);
+
+    VkBuffer buf = bacs.buf();
+    VkDeviceSize offset = bacs.offset();
+    vkCmdBindVertexBuffers(cmd_buf, 0, 1, &buf, &offset);
+
+    vkCmdBindPipeline(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, _pl);
+
+    vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
+      _pl_layout, 0, 1, &_desc_set, 0, nullptr);
+    
+    vkCmdEndRenderPass(cmd_buf);
+  }
+
+  /* Dispatch render pass. */ {
+    vkCmdDraw(cmd_buf, bacs.size(), 1, 0, 0);
+  }
+
+  /* Sync for host to read. */ {
+    VkImageMemoryBarrier imb {};
+  }
+
+  /* End recording commands. */ {
+    if (L_VK <- vkEndCommandBuffer(cmd_buf)) {
+      LOG.error("unable to finish recording commands");
+      return false;
+    }
+  }
+
+  /* Submit to device for execution. */ {
+    VkFenceCreateInfo fci {};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    VkFence fence;
+    vkCreateFence(dev, &fci, nullptr, &fence);
+
+    VkQueue queue = ctxt().get_queue(ExecType::Graphics);
+
+    vkQueueWaitIdle(queue);
+
+    VkSubmitInfo si {};
+    vkQueueSubmit(queue, 1, &si, fence);
+    // TODO: (penguinliong) Use constants.
+    vkWaitForFences(dev, 1, &fence, VK_TRUE, 5'000'000);
+  }
+
+  vkFreeCommandBuffers(dev, cmd_pool, 1, &cmd_buf);
 
   return false;
 }

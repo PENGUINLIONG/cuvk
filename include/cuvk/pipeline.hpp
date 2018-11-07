@@ -22,7 +22,6 @@ protected:
   VkDescriptorSetLayout _desc_set_layout;
   VkDescriptorPool _desc_pool;
   VkDescriptorSet _desc_set;
-  VkRenderPass _pass;
   VkPipelineLayout _pl_layout;
   VkPipeline _pl;
 
@@ -62,8 +61,7 @@ class GraphicsShaderContextual : public PipelineContextual {
 private:
   std::array<VkShaderModule, 3> _mods;
   uint32_t _rows, _cols, _layers;
-
-  bool create_pass();
+  VkRenderPass _pass;
 
   bool create_pl() override final;
   void destroy_pl() override final;
@@ -71,11 +69,19 @@ private:
 public:
   using Binding = VkVertexInputBindingDescription;
   using Attribute = VkVertexInputAttributeDescription;
+  using Blend = VkPipelineColorBlendAttachmentState;
+  using Attachment = VkAttachmentDescription;
 
   GraphicsShaderContextual(uint32_t rows, uint32_t cols, uint32_t layers);
 
   virtual const std::vector<Binding>& in_binds() const = 0;
   virtual const std::vector<Attribute>& in_attrs() const = 0;
+  virtual const std::vector<Blend>& out_blends() const = 0;
+  virtual const std::vector<Attachment>& out_attaches() const = 0;
+
+  VkRenderPass render_pass() const;
+
+  virtual VkRenderPass create_pass() const = 0;
 
   virtual Spirv vert_spirv() const = 0;
   virtual Spirv geom_spirv() const = 0;

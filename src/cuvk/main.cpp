@@ -22,6 +22,10 @@ int main() {
   auto ctxt = std::make_shared<Context>();
   select_phys_dev(*ctxt);
 
+  //
+  // Deformation
+  //
+
   auto deform = ctxt->make_contextual<Deformation>();
 
   auto specs_aligned = 
@@ -75,6 +79,59 @@ int main() {
     bac_out.orient,
     bac_out.pos[0], bac_out.pos[1],
     bac_out.size[0], bac_out.size[1]);
+
+
+
+  //
+  // Evaluation
+  //
+
+  auto eval = ctxt->make_contextual<Evaluation>(360, 240, 1);
+
+  auto sending = ctxt->make_contextual<StorageImage>(
+    VkExtent2D{ 360, 240 }, 1,
+    ExecType::Graphics, StorageOptimization::DeviceOnly,
+    VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT,
+    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    VK_IMAGE_TILING_LINEAR);
+
+  auto real_univ = ctxt->make_contextual<StorageImage>(
+    VkExtent2D{ 360, 240 }, 1,
+    ExecType::Graphics, StorageOptimization::DeviceOnly,
+    VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT,
+    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    VK_IMAGE_TILING_OPTIMAL);
+  auto sim_univs = ctxt->make_contextual<StorageImage>(
+    VkExtent2D{ 360, 240 }, 1,
+    ExecType::Graphics, StorageOptimization::DeviceOnly,
+    VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT,
+    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    VK_IMAGE_TILING_OPTIMAL);
+
+  auto img_mem = ctxt->make_contextual<Storage>(
+    sending->alloc_size() + real_univ->alloc_size() + sim_univs->alloc_size(),
+    StorageOptimization::Send);
+  sending->bind(img_mem, 0);
+  real_univ->bind(img_mem, sending->alloc_size());
+  sim_univs->bind(img_mem, sending->alloc_size() + real_univ->alloc_size());
+
+  std::vector<char> buf(sending->size(), 0);
+
+  img_mem->send(buf.data(), 0,
+    sending->alloc_size() + real_univ->alloc_size() + sim_univs->alloc_size());
+
+  eval->execute(deform_in_buf->view(),
+    *ctxt->make_contextual<StorageImageView>(real_univ),
+    *ctxt->make_contextual<StorageImageView>(sim_univs),
+    deform_out_buf->view());
+
+  img_mem->fetch(buf.data(), sending->alloc_size(), sending->size());
+
+
+
 
   std::getc(stdin);
   return 0;

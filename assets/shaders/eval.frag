@@ -26,20 +26,20 @@ in vec4 gl_FragCoord;
 //  The real next universe.
 layout(r32f, binding=0) readonly
 uniform image2D real_univ;
-layout(r32f, binding=1) writeonly
-uniform image2DArray sim_univs;
-//  Calculated costs.
-layout(binding=2)
-buffer costs_buf {
-  float[] costs;
-};
 //L
 
 
 
+//
+// Output
+// ------
+//  The differences between simulated universes and the real universe.
+layout(location=0)
+out float sim_univ;
+//L
+
 void main() {
   ivec2 coord = ivec2(gl_FragCoord.xy);
   float real_val = imageLoad(real_univ, coord).x;
-  imageStore(sim_univs, ivec3(coord, gl_Layer), vec4(1.0, 0.0, 0.0, 0.0));
-  costs[gl_Layer] += abs(real_val - 1.0);
+  sim_univ = 1.;
 }

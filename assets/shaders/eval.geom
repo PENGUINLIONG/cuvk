@@ -41,7 +41,7 @@ struct Bacterium {
 layout(points)
 in;
 //  Bacterium.
-layout(location=4)
+layout(location=0)
 in Bacterium bacs[];
 //L
 

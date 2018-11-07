@@ -174,21 +174,8 @@ GraphicsShaderContextual::GraphicsShaderContextual(
   uint32_t rows, uint32_t cols, uint32_t layers) :
   _rows(rows), _cols(cols), _layers(layers) { }
 
-bool GraphicsShaderContextual::create_pass() {
-  // Create render pass with attachment (output image) info. We have no
-  // attachment here.
-  VkSubpassDescription sd{};
-  sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-
-  VkRenderPassCreateInfo rpci{};
-  rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  rpci.subpassCount = 1;
-  rpci.pSubpasses = &sd;
-
-  if (L_VK <- vkCreateRenderPass(ctxt().dev(), &rpci, nullptr, &_pass)) {
-    LOG.error("unable to create render pass");
-    return false;
-  }
+VkRenderPass GraphicsShaderContextual::render_pass() const {
+  return _pass;
 }
 
 bool GraphicsShaderContextual::create_pl() {
@@ -216,8 +203,8 @@ bool GraphicsShaderContextual::create_pl() {
   pssci[1].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
   pssci[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-  // Create render pass.
-  if (!create_pass()) { return false; }
+  _pass = create_pass();
+  if (_pass == VK_NULL_HANDLE) return false;
 
   // Vertex inputs.
   auto vibds = in_binds();
@@ -249,8 +236,9 @@ bool GraphicsShaderContextual::create_pl() {
   // Resterization requirements.
   VkPipelineRasterizationStateCreateInfo prsci{};
   prsci.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  prsci.cullMode = VK_BACK;
+  prsci.cullMode = VK_CULL_MODE_BACK_BIT;
   prsci.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  prsci.lineWidth = 1.;
 
   // Multisampling which we don't need.
   VkPipelineMultisampleStateCreateInfo pmsci{};
@@ -259,9 +247,12 @@ bool GraphicsShaderContextual::create_pl() {
   pmsci.minSampleShading = 1.0;
 
   // Blending which we don't need.
+  auto blends = out_blends();
   VkPipelineColorBlendStateCreateInfo pcbsci{};
   pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
   pcbsci.blendConstants[0] = 1.0;
+  pcbsci.attachmentCount = blends.size();
+  pcbsci.pAttachments = blends.data();
 
   // Create graphics pipeline.
   VkGraphicsPipelineCreateInfo gpci{};
