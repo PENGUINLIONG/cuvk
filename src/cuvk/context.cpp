@@ -231,9 +231,9 @@ bool Context::select_phys_dev(const PhysicalDeviceInfo& pdi) {
 }
 
 void Context::invalidate() {
-  for (auto& x : _rg) {
-    x->context_changing();
-    x->_ctxt = nullptr;
+  for (auto it = _rg.rbegin(); it != _rg.rend(); ++it) {
+    (*it)->context_changing();
+    (*it)->_ctxt = nullptr;
   }
   _mem_types.clear();
   _mem_heaps.clear();
