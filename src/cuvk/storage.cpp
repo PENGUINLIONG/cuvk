@@ -374,6 +374,10 @@ const VkExtent2D& StorageImageView::extent() const {
 std::optional<uint32_t> StorageImageView::nlayer() const {
   return _img->nlayer();
 }
+VkImageLayout StorageImageView::preferred_layout() const {
+  return _img->preferred_layout();
+}
+
 
 //
 // StorageImage ----------------------------------------------------------------

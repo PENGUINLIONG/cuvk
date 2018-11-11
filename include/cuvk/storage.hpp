@@ -154,6 +154,7 @@ public:
   const VkOffset2D& offset() const;
   const VkExtent2D& extent() const;
   std::optional<uint32_t> nlayer() const;
+  VkImageLayout preferred_layout() const;
 };
 
 class StorageImage : public Contextual,
