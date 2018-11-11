@@ -189,6 +189,7 @@ public:
   VkImageLayout preferred_layout() const;
   std::optional<uint32_t> nlayer() const;
   size_t size() const;
+  VkFormat format() const;
 
   size_t alloc_size() const;
 

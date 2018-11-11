@@ -347,7 +347,7 @@ bool StorageImageView::context_changed() {
   // TODO: (penguinliong) Make it adjustable later.
   ivci.viewType = _img->nlayer() ?
     VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-  ivci.format = VK_FORMAT_R32_SFLOAT;
+  ivci.format = _img->format();
   ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
   ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   ivci.subresourceRange.layerCount = _img->nlayer().value_or(1);
@@ -450,6 +450,9 @@ std::optional<uint32_t> StorageImage::nlayer() const {
 size_t StorageImage::size() const {
   // TODO: (penguinliong) Adapt to other color formats.
   return _extent.width * _extent.height * _nlayer.value_or(1) * sizeof(float);
+}
+VkFormat StorageImage::format() const {
+  return _format;
 }
 
 size_t StorageImage::alloc_size() const {
