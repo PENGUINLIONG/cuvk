@@ -2,38 +2,73 @@
 #include "cuvk/comdef.hpp"
 #include "cuvk/context.hpp"
 #include <vector>
+#include <functional>
+#include <optional>
 #include <vulkan/vulkan.h>
 
 L_CUVK_BEGIN_
 
+// Represent a lazy evaluated allocation size or offset. Measure has the same
+// meaning as that in Mathematics.
+struct StorageMeasure {
+private:
+  std::function<size_t()> _fn;
+
+public:
+  StorageMeasure(size_t size) noexcept;
+  StorageMeasure(const std::function<size_t()> size_fn) noexcept;
+
+  operator size_t() const noexcept;
+  template<typename _ = std::enable_if_t<!std::is_same_v<size_t, VkDeviceSize>>>
+  operator VkDeviceSize() const noexcept {
+    return static_cast<VkDeviceSize>(_fn());
+  }
+};
+
+
 enum class StorageOptimization {
-  Send, Fetch, DeviceOnly
+  Send, Fetch, Duplex
 };
 
 // Represent a huge lump of data on device.
-class Storage : public Contextual {
+class Storage : public Contextual,
+  public std::enable_shared_from_this<Storage> {
 private:
-  size_t _size;
-  StorageOptimization _opt;
+  StorageMeasure _size;
   VkDeviceMemory _dev_mem;
-  VkMemoryPropertyFlags _flags;
+  VkMemoryPropertyFlags _props;
+  const std::vector<VkMemoryPropertyFlags>& _fallbacks;
+
+protected:
+  Storage(StorageMeasure size,
+    L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks);
 
 public:
-  Storage(size_t size, StorageOptimization opt);
-  ~Storage();
-
   Storage(const Storage&) = delete;
   Storage& operator=(const Storage&) = delete;
 
   VkDeviceMemory dev_mem() const;
-
+  VkMemoryPropertyFlags props() const;
   size_t size() const;
 
   bool context_changing() override;
   bool context_changed() override;
+};
 
-  bool send(const void* data, size_t dst_offset, size_t size);
-  bool fetch(L_OUT void* data, size_t src_offset, size_t size);
+class DeviceOnlyStorage : public Storage {
+public:
+  DeviceOnlyStorage(StorageMeasure size);
+};
+
+// Storage that is visible to the host, used to transfer data between the host
+// and the device.
+class StagingStorage : public Storage {
+public:
+  StagingStorage(StorageMeasure size, StorageOptimization opt);
+  StagingStorage(const StagingStorage&) = delete;
+  
+  bool send(const void* src, StorageMeasure dst_offset, StorageMeasure size);
+  bool fetch(L_OUT void* dst, StorageMeasure src_offset, StorageMeasure size);
 };
 
 
@@ -43,12 +78,13 @@ class StorageBuffer;
 class StorageBufferView {
   friend class StorageBuffer;
 private:
-  std::shared_ptr<const StorageBuffer> _buf;
-  size_t _offset;
-  size_t _size;
+  std::shared_ptr<StorageBuffer> _buf;
+  StorageMeasure _offset;
+  StorageMeasure _size;
 
-  StorageBufferView(std::shared_ptr<const StorageBuffer> buf,
-    size_t offset, size_t size);
+protected:
+  StorageBufferView(std::shared_ptr<StorageBuffer> buf,
+    StorageMeasure offset, StorageMeasure size);
 
 public:
   VkBuffer buf() const;
@@ -61,15 +97,13 @@ class StorageBuffer : public Contextual,
   public std::enable_shared_from_this<StorageBuffer> {
 private:
   std::shared_ptr<Storage> _storage;
-  size_t _offset;
-  size_t _size;
+  StorageMeasure _offset;
+  StorageMeasure _size;
   VkBuffer _buf;
-  ExecType _ty;
   VkBufferUsageFlags _usage;
 
 public:
-  StorageBuffer(size_t size, ExecType ty, VkBufferUsageFlags usage);
-  ~StorageBuffer();
+  StorageBuffer(StorageMeasure size, VkBufferUsageFlags usage);
   
   StorageBuffer(const StorageBuffer&) = delete;
   StorageBuffer& operator=(const StorageBuffer&) = delete;
@@ -81,21 +115,19 @@ public:
   const Storage& storage() const;
   size_t size() const;
   VkBuffer buf() const;
+  
+  StorageBufferView view();
+  StorageBufferView view(
+    StorageMeasure offset, StorageMeasure size);
 
-  StorageBufferView view() const;
-  StorageBufferView view(size_t offset, size_t size) const;
+  bool bind(Storage& storage, StorageMeasure offset = 0);
 
   // There is extra size for metadata required by the driver. So the resultant
   // memory allocation should be `size + meta_size`, which is slightly larger
   // than that we required via the constructor.
   size_t alloc_size() const;
-
-  // FIXME: (penguinliong) Memory bindings will be invalid after device change
-  // because the underlying storages are not necessarily created after the
-  // buffer objects. The current solution is error-prone. A better device change
-  // strategy should be devised later.
-  bool bind(std::shared_ptr<Storage> storage, size_t offset);
 };
+
 
 
 
@@ -109,11 +141,11 @@ private:
   VkOffset2D _offset;
   VkExtent2D _extent;
 
-public:
-  StorageImageView(std::shared_ptr<const StorageImage> img);
-  StorageImageView(std::shared_ptr<const StorageImage> img,
-    VkOffset2D offset, VkExtent2D extent);
+protected:
+  StorageImageView(std::shared_ptr<StorageImage> img,
+    const VkOffset2D& offset, const VkExtent2D& extent);
 
+public:
   bool context_changing() override;
   bool context_changed() override;
 
@@ -121,13 +153,7 @@ public:
   VkImageView img_view() const;
   const VkOffset2D& offset() const;
   const VkExtent2D& extent() const;
-  uint32_t nlayer() const;
-  VkImageLayout layout() const;
-};
-
-enum class ImageType {
-  Image1D, Image2D, Image3D,
-  Image1DArray, Image2DArray, Image3DArray,
+  std::optional<uint32_t> nlayer() const;
 };
 
 class StorageImage : public Contextual,
@@ -136,28 +162,22 @@ private:
   VkImage _img;
 
   std::shared_ptr<Storage> _storage;
-  size_t _offset;
+  StorageMeasure _offset;
 
   VkExtent2D _extent;
-  uint32_t _nlayer;
-  ExecType _exec_ty;
-  StorageOptimization _opt;
-  VkImageType _img_ty;
   VkFormat _format;
   VkImageUsageFlags _usage;
   VkImageLayout _layout;
   VkImageTiling _tiling;
+  std::optional<uint32_t> _nlayer;
+
+protected:
+  StorageImage(
+    const VkExtent2D& extent, std::optional<uint32_t> nlayer,
+    VkFormat format, VkImageUsageFlags usage,
+    VkImageLayout layout, VkImageTiling tiling);
 
 public:
-  StorageImage(const VkExtent2D& extent, uint32_t nlayer,
-    ExecType exec_ty, StorageOptimization opt,
-    // FIXME: (penguinliong) Redesign how to pass the following information.
-    VkImageType img_ty, VkFormat format,
-    VkImageUsageFlags usage, VkImageLayout layout,
-    VkImageTiling tiling);
-
-  ~StorageImage();
-
   bool context_changing() override;
   bool context_changed() override;
 
@@ -165,13 +185,37 @@ public:
   const Storage& storage() const;
   const VkExtent2D& extent() const;
   VkImage img() const;
-  VkImageLayout layout() const;
-  uint32_t nlayer() const;
+  VkImageLayout preferred_layout() const;
+  std::optional<uint32_t> nlayer() const;
   size_t size() const;
 
   size_t alloc_size() const;
 
-  bool bind(std::shared_ptr<Storage> storage, size_t offset);
+  bool bind(Storage& storage, size_t offset);
+
+  StorageImageView view(const VkOffset2D& offset,
+    const VkExtent2D& extent);
+};
+
+class GeneralStorageImage : public StorageImage {
+private:
+  StorageImageView view(const VkOffset2D& offset, const VkExtent2D& extent);
+
+public:
+  GeneralStorageImage(
+    const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format);
+};
+
+class ColorAttachmentStorageImage : public StorageImage {
+public:
+  ColorAttachmentStorageImage(
+    const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format);
+};
+
+class UniformStorageImage : public StorageImage {
+public:
+  UniformStorageImage(
+    const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format);
 };
 
 L_CUVK_END_
