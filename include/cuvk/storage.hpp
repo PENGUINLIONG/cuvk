@@ -90,6 +90,8 @@ public:
   VkBuffer buf() const;
   size_t offset() const;
   size_t size() const;
+
+  VkBufferMemoryBarrier barrier(VkAccessFlags src, VkAccessFlags dst) const;
 };
 
 // Wrapped memory chunk for structured data.
@@ -155,6 +157,9 @@ public:
   const VkExtent2D& extent() const;
   std::optional<uint32_t> nlayer() const;
   VkImageLayout preferred_layout() const;
+
+  VkImageMemoryBarrier barrier(VkAccessFlags src, VkAccessFlags dst) const;
+  VkBufferImageCopy copy_with_buffer(const StorageBufferView& buf) const;
 };
 
 class StorageImage : public Contextual,
@@ -195,16 +200,17 @@ public:
 
   bool bind(Storage& storage, size_t offset);
 
+  StorageImageView view();
   StorageImageView view(const VkOffset2D& offset,
     const VkExtent2D& extent);
 };
 
-class GeneralStorageImage : public StorageImage {
+class StagingStorageImage : public StorageImage {
 private:
   StorageImageView view(const VkOffset2D& offset, const VkExtent2D& extent);
 
 public:
-  GeneralStorageImage(
+  StagingStorageImage(
     const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format);
 };
 

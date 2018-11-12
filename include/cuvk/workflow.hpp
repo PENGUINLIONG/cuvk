@@ -54,7 +54,9 @@ public:
   VkRenderPass create_pass() const override;
 
   bool execute(const StorageBufferView& bacs,
+               const StorageBufferView& real_univ_buf,
                const StorageImageView& real_univ,
+               L_OUT StorageBufferView& sim_univs_buf,
                L_OUT StorageImageView& sim_univs,
                L_OUT StorageBufferView& costs);
 };

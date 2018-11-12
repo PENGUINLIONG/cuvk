@@ -333,9 +333,10 @@ VkRenderPass Evaluation::create_pass() const {
   }
   return rp;
 }
-
 bool Evaluation::execute(const StorageBufferView& bacs,
+                         const StorageBufferView& real_univ_buf,
                          const StorageImageView& real_univ,
+                         L_OUT StorageBufferView& sim_univs_buf,
                          L_OUT StorageImageView& sim_univs,
                          L_OUT StorageBufferView& costs) {
   auto dev = ctxt().dev();
@@ -346,7 +347,7 @@ bool Evaluation::execute(const StorageBufferView& bacs,
   VkFramebuffer f;
 
   VkExtent2D extent = real_univ.extent();
-  uint32_t nlayer = sim_univs.nlayer();
+  uint32_t nlayer = sim_univs.nlayer().value_or(1);
 
   /* Allocate command buffer. */ {
     VkCommandBufferAllocateInfo cbai {};
@@ -374,39 +375,44 @@ bool Evaluation::execute(const StorageBufferView& bacs,
 
   /* Sync to ensure all bacteria data and the real universe are written to
      device memory. */ {
-    VkBufferMemoryBarrier bmb {};
-    bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    bmb.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    bmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    bmb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bmb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bmb.buffer = bacs.buf();
-    bmb.offset = bacs.offset();
-    bmb.size = bacs.size();
-  
-    VkImageMemoryBarrier imb {};
-    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    imb.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    imb.image = real_univ.img();
-    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    imb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    std::array<VkBufferMemoryBarrier, 2> bmbs {};
+    bmbs[0] = bacs.barrier(
+      VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    bmbs[1] = real_univ_buf.barrier(
+      VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
 
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_HOST_BIT,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, // No dependency flags.
       0, nullptr,
-      1, &bmb,
+      bmbs.size(), bmbs.data(),
+      0, nullptr);
+  }
+
+  /* Transfer real universe's pixel data to image. */ {
+    auto bic = real_univ.copy_with_buffer(real_univ_buf);
+    vkCmdCopyBufferToImage(cmd_buf, real_univ_buf.buf(), real_univ.img(),
+      real_univ.preferred_layout(), 1, &bic);
+  }
+
+  /* Sync again to ensure buffer data is fully written to the image object. */ {
+    auto imb = real_univ.barrier(
+      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+      0,
+      0, nullptr,
+      0, nullptr,
       1, &imb);
   }
 
   /* Update description. */ {
     VkDescriptorImageInfo dii {};
     dii.imageView = real_univ.img_view();
-    dii.imageLayout = real_univ.layout();
+    dii.imageLayout = real_univ.preferred_layout();
 
     VkWriteDescriptorSet wds {};
     wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -435,7 +441,6 @@ bool Evaluation::execute(const StorageBufferView& bacs,
   }
 
   /* Record render pass. */ {
-
     std::array<VkClearValue, 2> cv;
     cv[0].color = { { 0., 0., 0., 1. } };
     cv[1].depthStencil = { 1., 0 };
@@ -482,8 +487,34 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     vkCmdDraw(cmd_buf, bacs.size(), 1, 0, 0);
   }
 
+  /* Sync for transfer to output buffer. */ {
+    auto imb = sim_univs.barrier(
+      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0,
+      0, nullptr,
+      0, nullptr,
+      1, &imb);
+  }
+
+  /* Transfer data to output buffer. */ {
+    auto bic = sim_univs.copy_with_buffer(sim_univs_buf);
+    vkCmdCopyImageToBuffer(cmd_buf, sim_univs.img(),
+      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, sim_univs_buf.buf(), 1, &bic);
+  }
+
   /* Sync for host to read. */ {
-    VkImageMemoryBarrier imb {};
+    auto bmb = sim_univs_buf.barrier(
+      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_HOST_BIT,
+      0,
+      0, nullptr,
+      1, &bmb,
+      0, nullptr);
   }
 
   /* End recording commands. */ {
@@ -514,4 +545,5 @@ bool Evaluation::execute(const StorageBufferView& bacs,
 
   return false;
 }
+
 L_CUVK_END_

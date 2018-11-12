@@ -247,6 +247,18 @@ size_t StorageBufferView::size() const {
   return _size;
 }
 
+VkBufferMemoryBarrier StorageBufferView::barrier(
+  VkAccessFlags src, VkAccessFlags dst) const {
+  VkBufferMemoryBarrier bmb {};
+  bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  bmb.buffer = buf();
+  bmb.offset = _offset;
+  bmb.size = _size;
+  bmb.srcAccessMask = src;
+  bmb.dstAccessMask = dst;
+  return bmb;
+}
+
 //
 // StorageBuffer ---------------------------------------------------------------
 //L
@@ -377,7 +389,31 @@ std::optional<uint32_t> StorageImageView::nlayer() const {
 VkImageLayout StorageImageView::preferred_layout() const {
   return _img->preferred_layout();
 }
+VkImageMemoryBarrier StorageImageView::barrier(
+  VkAccessFlags src, VkAccessFlags dst) const {
+  VkImageMemoryBarrier imb {};
+  imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  imb.image = img();
+  imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  imb.newLayout = preferred_layout();
+  imb.srcAccessMask = src;
+  imb.dstAccessMask = dst;
+  imb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  return imb;
+}
 
+VkBufferImageCopy StorageImageView::copy_with_buffer(
+  const StorageBufferView& buf) const {
+  auto layer = nlayer().value_or(1);
+  VkBufferImageCopy bic {};
+  bic.bufferOffset = buf.offset();
+  bic.bufferRowLength = _extent.width;
+  bic.bufferImageHeight = _extent.height;
+  bic.imageExtent = { _extent.width, _extent.height, layer };
+  bic.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  bic.imageSubresource.layerCount = layer;
+  return bic;
+}
 
 //
 // StorageImage ----------------------------------------------------------------
@@ -471,6 +507,9 @@ bool StorageImage::bind(Storage& storage, size_t offset) {
   _storage = storage.shared_from_this();
   _offset = offset;
 }
+StorageImageView StorageImage::view() {
+  return { shared_from_this(), { 0, 0 }, _extent };
+}
 StorageImageView StorageImage::view(const VkOffset2D& offset,
   const VkExtent2D& extent) {
   return { shared_from_this(), offset, extent };
@@ -478,14 +517,14 @@ StorageImageView StorageImage::view(const VkOffset2D& offset,
 
 // StagingStorageImage ---------------------------------------------------------
 
-GeneralStorageImage::GeneralStorageImage(
+StagingStorageImage::StagingStorageImage(
   const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
   StorageImage(extent, nlayer, format,
     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
     VK_IMAGE_LAYOUT_GENERAL,
     VK_IMAGE_TILING_LINEAR) {}
 
-StorageImageView GeneralStorageImage::view(
+StorageImageView StagingStorageImage::view(
   const VkOffset2D& offset, const VkExtent2D& extent) {
   LOG.error("cannot create view for storage image");
   std::terminate();
