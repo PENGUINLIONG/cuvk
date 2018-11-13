@@ -60,10 +60,10 @@ int main() {
   // Evaluation
   //
 
-  auto eval = ctxt->make_contextual<Evaluation>(360, 240, 1);
+  auto eval = ctxt->make_contextual<Evaluation>(90, 60, 1);
 
   auto real_univ = ctxt->make_contextual<UniformStorageImage>(
-    VkExtent2D{ 360, 240 }, std::nullopt, VK_FORMAT_R32_SFLOAT);
+    VkExtent2D{ 90, 60 }, std::nullopt, VK_FORMAT_R32_SFLOAT);
   auto real_univ_mem = ctxt->make_contextual<DeviceOnlyStorage>();
   real_univ->bind(*real_univ_mem);
   auto real_univ_view = real_univ ->view();
@@ -77,7 +77,7 @@ int main() {
 
 
   auto sim_univs = ctxt->make_contextual<ColorAttachmentStorageImage>(
-    VkExtent2D{ 360, 240 }, 1, VK_FORMAT_R32_SFLOAT);
+    VkExtent2D { 90, 60 }, 1, VK_FORMAT_R32_SFLOAT);
   auto sim_univs_mem = ctxt->make_contextual<DeviceOnlyStorage>();
   sim_univs->bind(*sim_univs_mem);
   auto sim_univs_view = sim_univs->view();
@@ -101,18 +101,18 @@ int main() {
 
   select_phys_dev(*ctxt);
 
-  
+
   // Set up input data.
   DeformSpecs spec {};
-  spec.rotate = 1.;
+  spec.rotate = 30. / 180.;
   spec.stretch = { 1., 1. };
-  spec.translate = { 1., 1. };
+  spec.translate = { -0.2, -0.1 };
   deform_in_mem->send(&spec, 0, sizeof(DeformSpecs));
 
   Bacterium bac {};
-  bac.orient = 1.;
+  bac.orient = 0.;
   bac.pos = { 0., 0. };
-  bac.size = { 4., 5. };
+  bac.size = { .1, .03 };
   bac.univ = 0;
   deform_in_mem->send(&bac, specs_aligned, sizeof(Bacterium));
 
@@ -132,7 +132,7 @@ int main() {
     bac_out.size[0], bac_out.size[1]);
 
 
-  std::vector<char> buf(sim_univs_buf->size(), 0.1);
+  std::vector<float> buf(sim_univs_buf->size() / sizeof(float), 0.);
 
   real_univ_buf_mem->send(buf.data(), 0, buf.size());
 
@@ -143,10 +143,15 @@ int main() {
     *sim_univs_view,
     cost_buf->view());
 
-  sim_univs_buf_mem->fetch(buf.data(), 0, buf.size());
+  sim_univs_buf_mem->fetch(buf.data(), 0, sim_univs_buf->size());
 
 
-
+  std::vector<uint8_t> bytes {};
+  bytes.reserve(sim_univs_buf->size() / sizeof(float));
+  LOG.info("{}", (uint64_t)bytes.data());
+  for (auto val : buf) {
+    bytes.push_back(std::round(val * 255.));
+  }
 
 
   std::getc(stdin);

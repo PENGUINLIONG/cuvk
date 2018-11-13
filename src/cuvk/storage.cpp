@@ -149,11 +149,13 @@ bool Storage::context_changed() {
   VkMemoryAllocateInfo mai{};
   mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   mai.allocationSize = _size;
-  mai.memoryTypeIndex = ctxt().find_mem_type(_mem_type_hint, _props);
+  auto idx = ctxt().find_mem_type(_mem_type_hint, _props);
+  mai.memoryTypeIndex = idx;
   if (L_VK <- vkAllocateMemory(ctxt().dev(), &mai, nullptr, &_dev_mem)) {
     LOG.error("unable to allocate memory for storage");
     return false;
   }
+  LOG.info("allocated {} bytes on heap {}", _size, ctxt().get_mem_heap_idx(idx));
 
   for (auto& dep : _deps) {
     switch (dep.type)

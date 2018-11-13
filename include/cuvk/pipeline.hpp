@@ -81,8 +81,6 @@ public:
 
   VkRenderPass render_pass() const;
 
-  virtual VkRenderPass create_pass() const = 0;
-
   virtual Spirv vert_spirv() const = 0;
   virtual Spirv geom_spirv() const = 0;
   virtual Spirv frag_spirv() const = 0;

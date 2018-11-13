@@ -178,9 +178,9 @@ void ComputeShaderContextual::destroy_pl() {
 
 
 GraphicsShaderContextual::GraphicsShaderContextual(
-  uint32_t rows, uint32_t cols, uint32_t layers) :
+  uint32_t width, uint32_t height, uint32_t layers) :
   _mods{ VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE },
-  _rows(rows), _cols(cols), _layers(layers),
+  _rows(width), _cols(height), _layers(layers),
   _pass(VK_NULL_HANDLE) { }
 
 VkRenderPass GraphicsShaderContextual::render_pass() const {
@@ -212,10 +212,30 @@ bool GraphicsShaderContextual::create_pl() {
   pssci[1].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
   pssci[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-  _pass = create_pass();
-  if (_pass == VK_NULL_HANDLE) return false;
+  /* Render pass. */ {
+    auto attaches = out_attaches();
+    VkAttachmentReference ar {};
+    ar.attachment = 0;
+    ar.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-  // Vertex inputs.
+    VkSubpassDescription sd {};
+    sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sd.colorAttachmentCount = 1;
+    sd.pColorAttachments = &ar;
+
+    VkRenderPassCreateInfo rpci {};
+    rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpci.attachmentCount = attaches.size();
+    rpci.pAttachments = attaches.data();
+    rpci.subpassCount = 1;
+    rpci.pSubpasses = &sd;
+
+    if (L_VK <- vkCreateRenderPass(ctxt().dev(), &rpci, nullptr, &_pass)) {
+      LOG.error("unable to create render pass");
+      return false;
+    }
+  }
+
   auto vibds = in_binds();
   auto viads = in_attrs();
 
@@ -245,7 +265,7 @@ bool GraphicsShaderContextual::create_pl() {
   // Resterization requirements.
   VkPipelineRasterizationStateCreateInfo prsci{};
   prsci.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-  prsci.cullMode = VK_CULL_MODE_BACK_BIT;
+  prsci.cullMode = VK_CULL_MODE_NONE;
   prsci.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   prsci.lineWidth = 1.;
 

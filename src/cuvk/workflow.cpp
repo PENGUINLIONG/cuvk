@@ -260,13 +260,6 @@ std::vector<Evaluation::Attribute> Evaluation::_in_attrs = {
   { 3, 0, VK_FORMAT_R32_SINT,      5 * sizeof(float) }, // univ
 };
 std::vector<Evaluation::Blend> Evaluation::_out_blends = {
-  VkPipelineColorBlendAttachmentState
-  {
-    VK_FALSE,
-    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX,
-    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX,
-    0xF
-  },
 };
 std::vector<Evaluation::Attachment> Evaluation::_out_attaches = {
   VkAttachmentDescription
@@ -311,32 +304,6 @@ Evaluation::Evaluation(uint32_t rows, uint32_t cols, uint32_t layers) :
   GraphicsShaderContextual(rows, cols, layers) {
 }
 
-VkRenderPass Evaluation::create_pass() const {
-  VkRenderPass rp;
-
-  auto attaches = out_attaches();
-  VkAttachmentReference ar {};
-  ar.attachment = 0;
-  ar.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-  VkSubpassDescription sd {};
-  sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-  sd.colorAttachmentCount = 1;
-  sd.pColorAttachments = &ar;
-
-  VkRenderPassCreateInfo rpci {};
-  rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  rpci.attachmentCount = attaches.size();
-  rpci.pAttachments = attaches.data();
-  rpci.subpassCount = 1;
-  rpci.pSubpasses = &sd;
-
-  if (L_VK <- vkCreateRenderPass(ctxt().dev(), &rpci, nullptr, &rp)) {
-    LOG.error("unable to create render pass");
-    return VK_NULL_HANDLE;
-  }
-  return rp;
-}
 bool Evaluation::execute(const StorageBufferView& bacs,
                          const StorageBufferView& real_univ_buf,
                          const StorageImageView& real_univ,
@@ -551,12 +518,15 @@ bool Evaluation::execute(const StorageBufferView& bacs,
   /* Submit to device for execution. */ {
     VkFenceCreateInfo fci {};
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     VkFence fence;
     if (L_VK <- vkCreateFence(dev, &fci, nullptr, &fence)) {
       LOG.error("unable to create fence");
       return false;
     }
+
+    vkResetFences(dev, 1, &fence);
 
     VkQueue queue = ctxt().get_queue(ExecType::Graphics);
 

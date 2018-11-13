@@ -60,7 +60,7 @@ out; // out vec2 gl_Position;
 
 
 vec4 calc_pos(mat2 rotate, vec2 orig, vec2 offset) {
-  return vec4(rotate * orig + offset, 0.0, 0.0);
+  return vec4(rotate * orig + offset, 0.0, 1.0);
 }
 
 void main() {
@@ -76,34 +76,45 @@ void main() {
 
   // Right of the round tip.
   gl_Position = calc_pos(rotate, vec2(len + r, 0.0), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the round tip.
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, trig_45_r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the round tip.
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, -trig_45_r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the cylindrical part.
   gl_Position = calc_pos(rotate, vec2(len, r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the cylindrical part.
   gl_Position = calc_pos(rotate, vec2(len, -r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the cylindrical part.
   gl_Position = calc_pos(rotate, vec2(-len, r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the cylindrical part.
   gl_Position = calc_pos(rotate, vec2(-len, -r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the round tip.
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, trig_45_r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the round tip.
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, -trig_45_r), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left of the round tip.
   gl_Position = calc_pos(rotate, vec2(-len - r, 0.0), pos);
+  gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
 
   gl_Layer = bac.univ;
+  EndPrimitive();
 }

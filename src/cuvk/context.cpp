@@ -303,8 +303,8 @@ uint32_t Context::find_mem_type(uint32_t hint,
     translate_mem_props(flags));
   return VK_MAX_MEMORY_TYPES;
 }
-const std::vector<VkMemoryHeap>& Context::get_mem_heap() const {
-  return _mem_heaps;
+uint32_t Context::get_mem_heap_idx(uint32_t mem_type_idx) const {
+  return _mem_types[mem_type_idx].heapIndex;
 }
 
 uint32_t Context::get_queue_fam_idx(ExecType ty) const {

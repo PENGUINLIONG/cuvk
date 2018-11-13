@@ -51,8 +51,6 @@ public:
   Spirv geom_spirv() const override;
   Spirv frag_spirv() const override;
 
-  VkRenderPass create_pass() const override;
-
   bool execute(const StorageBufferView& bacs,
                const StorageBufferView& real_univ_buf,
                const StorageImageView& real_univ,
