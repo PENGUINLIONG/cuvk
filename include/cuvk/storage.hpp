@@ -25,6 +25,8 @@ public:
   }
 };
 
+class StorageBuffer;
+class StorageImage;
 
 enum class StorageOptimization {
   Send, Fetch, Duplex
@@ -34,14 +36,33 @@ enum class StorageOptimization {
 class Storage : public Contextual,
   public std::enable_shared_from_this<Storage> {
 private:
-  StorageMeasure _size;
+  struct Dependency {
+    Dependency(VkBuffer buf, VkDeviceSize offset);
+    Dependency(VkImage img, VkDeviceSize offset);
+    Dependency(Dependency&&);
+    ~Dependency() noexcept;
+    enum class Type { Buffer, Image } type;
+    VkDeviceSize offset;
+    union {
+      VkBuffer buf;
+      VkImage img;
+    };
+  };
+
+  size_t _size;
   VkDeviceMemory _dev_mem;
   VkMemoryPropertyFlags _props;
   const std::vector<VkMemoryPropertyFlags>& _fallbacks;
+  std::vector<Dependency> _deps;
+
+  uint32_t _mem_type_hint;
+  // The offset that will .
+  VkDeviceSize _cur_offset;
+
+  bool _declare_dependency(uint32_t hint, VkDeviceSize alloc_size);
 
 protected:
-  Storage(StorageMeasure size,
-    L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks);
+  Storage(L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks);
 
 public:
   Storage(const Storage&) = delete;
@@ -53,18 +74,25 @@ public:
 
   bool context_changing() override;
   bool context_changed() override;
+
+  // For use by `StorageBuffer` and `StorageImage` to declare which memory type
+  // should be used, how much size they want to take (size of driver metadata
+  // included), and the offset to the memory will be allocated for them is
+  // returned through reference.
+  bool declare_dependency(VkBuffer buf, uint32_t hint, VkDeviceSize alloc_size);
+  bool declare_dependency(VkImage img, uint32_t hint, VkDeviceSize alloc_size);
 };
 
 class DeviceOnlyStorage : public Storage {
 public:
-  DeviceOnlyStorage(StorageMeasure size);
+  DeviceOnlyStorage();
 };
 
 // Storage that is visible to the host, used to transfer data between the host
 // and the device.
 class StagingStorage : public Storage {
 public:
-  StagingStorage(StorageMeasure size, StorageOptimization opt);
+  StagingStorage(StorageOptimization opt);
   StagingStorage(const StagingStorage&) = delete;
   
   bool send(const void* src, StorageMeasure dst_offset, StorageMeasure size);
@@ -99,7 +127,6 @@ class StorageBuffer : public Contextual,
   public std::enable_shared_from_this<StorageBuffer> {
 private:
   std::shared_ptr<Storage> _storage;
-  StorageMeasure _offset;
   StorageMeasure _size;
   VkBuffer _buf;
   VkBufferUsageFlags _usage;
@@ -122,14 +149,8 @@ public:
   StorageBufferView view(
     StorageMeasure offset, StorageMeasure size);
 
-  bool bind(Storage& storage, StorageMeasure offset = 0);
-
-  // There is extra size for metadata required by the driver. So the resultant
-  // memory allocation should be `size + meta_size`, which is slightly larger
-  // than that we required via the constructor.
-  size_t alloc_size() const;
+  void bind(Storage& storage);
 };
-
 
 
 
@@ -143,11 +164,10 @@ private:
   VkOffset2D _offset;
   VkExtent2D _extent;
 
-protected:
+public:
   StorageImageView(std::shared_ptr<StorageImage> img,
     const VkOffset2D& offset, const VkExtent2D& extent);
 
-public:
   bool context_changing() override;
   bool context_changed() override;
 
@@ -156,9 +176,10 @@ public:
   const VkOffset2D& offset() const;
   const VkExtent2D& extent() const;
   std::optional<uint32_t> nlayer() const;
-  VkImageLayout preferred_layout() const;
 
-  VkImageMemoryBarrier barrier(VkAccessFlags src, VkAccessFlags dst) const;
+  VkImageMemoryBarrier barrier(
+    VkAccessFlags src, VkAccessFlags dst,
+    VkImageLayout srcLayout, VkImageLayout dstLayout) const;
   VkBufferImageCopy copy_with_buffer(const StorageBufferView& buf) const;
 };
 
@@ -168,20 +189,17 @@ private:
   VkImage _img;
 
   std::shared_ptr<Storage> _storage;
-  StorageMeasure _offset;
 
   VkExtent2D _extent;
   VkFormat _format;
   VkImageUsageFlags _usage;
-  VkImageLayout _layout;
   VkImageTiling _tiling;
   std::optional<uint32_t> _nlayer;
 
 protected:
   StorageImage(
     const VkExtent2D& extent, std::optional<uint32_t> nlayer,
-    VkFormat format, VkImageUsageFlags usage,
-    VkImageLayout layout, VkImageTiling tiling);
+    VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling);
 
 public:
   bool context_changing() override;
@@ -191,17 +209,14 @@ public:
   const Storage& storage() const;
   const VkExtent2D& extent() const;
   VkImage img() const;
-  VkImageLayout preferred_layout() const;
   std::optional<uint32_t> nlayer() const;
   size_t size() const;
   VkFormat format() const;
 
-  size_t alloc_size() const;
+  void bind(Storage& storage);
 
-  bool bind(Storage& storage, size_t offset);
-
-  StorageImageView view();
-  StorageImageView view(const VkOffset2D& offset,
+  std::shared_ptr<StorageImageView> view();
+  std::shared_ptr<StorageImageView> view(const VkOffset2D& offset,
     const VkExtent2D& extent);
 };
 

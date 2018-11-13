@@ -41,5 +41,5 @@ out float sim_univ;
 void main() {
   ivec2 coord = ivec2(gl_FragCoord.xy);
   float real_val = imageLoad(real_univ, coord).x;
-  sim_univ = 1.;
+  sim_univ = 1. - real_val;
 }

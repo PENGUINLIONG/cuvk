@@ -102,13 +102,14 @@ StorageMeasure::operator size_t() const noexcept {
 // Storage ---------------------------------------------------------------------
 //L
 
-Storage::Storage(StorageMeasure size,
-  L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks) :
+Storage::Storage(L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks) :
 
-  _size(size),
+  _size(0),
   _dev_mem(VK_NULL_HANDLE),
   _props(0),
-  _fallbacks(fallbacks) {}
+  _fallbacks(fallbacks),
+  _mem_type_hint(0xFFFFFFFF),
+  _cur_offset(0) {}
 
 VkDeviceMemory Storage::dev_mem() const {
   return _dev_mem;
@@ -125,13 +126,16 @@ bool Storage::context_changing() {
     vkFreeMemory(ctxt().dev(), _dev_mem, nullptr);
     _dev_mem = VK_NULL_HANDLE;
   }
+  _mem_type_hint = 0xFFFFFFFF;
+  _cur_offset = 0;
   _props = 0;
+  _deps.clear();
 
   return true;
 }
 bool Storage::context_changed() {
   for (const auto& mem_props : _fallbacks) {
-    auto mem_type_idx = ctxt().find_mem_type(mem_props);
+    auto mem_type_idx = ctxt().find_mem_type(_mem_type_hint, mem_props);
     if (mem_type_idx < VK_MAX_MEMORY_TYPES) {
       _props = mem_props;
       break;
@@ -145,27 +149,94 @@ bool Storage::context_changed() {
   VkMemoryAllocateInfo mai{};
   mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   mai.allocationSize = _size;
-  mai.memoryTypeIndex = ctxt().find_mem_type(_props);
+  mai.memoryTypeIndex = ctxt().find_mem_type(_mem_type_hint, _props);
   if (L_VK <- vkAllocateMemory(ctxt().dev(), &mai, nullptr, &_dev_mem)) {
     LOG.error("unable to allocate memory for storage");
     return false;
   }
+
+  for (auto& dep : _deps) {
+    switch (dep.type)
+    {
+    case Dependency::Type::Buffer:
+      if (L_VK <- vkBindBufferMemory(ctxt().dev(), dep.buf,
+        _dev_mem, dep.offset)) {
+        LOG.error("unable to bind image to device memory");
+        return false;
+      }
+      return true;
+    case Dependency::Type::Image:
+      if (L_VK <- vkBindImageMemory(ctxt().dev(), dep.img,
+        _dev_mem, dep.offset)) {
+        LOG.error("unable to bind image to device memory");
+        return false;
+      }
+      return true;
+    default:
+      std::terminate();
+    }
+  }
+}
+
+Storage::Dependency::Dependency(VkBuffer buf, VkDeviceSize offset) :
+  type(Type::Buffer),
+  buf(buf),
+  offset(offset) {}
+Storage::Dependency::Dependency(VkImage img, VkDeviceSize offset) :
+  type(Type::Image),
+  img(img),
+  offset(offset) {}
+Storage::Dependency::~Dependency() {}
+
+Storage::Dependency::Dependency(Dependency&& right) :
+  type(right.type) {
+  switch (type)
+  {
+  case cuvk::Storage::Dependency::Type::Buffer:
+    buf = std::exchange(right.buf, nullptr);
+  case cuvk::Storage::Dependency::Type::Image:
+    img = std::exchange(right.img, nullptr);
+  default:
+    std::terminate();
+  }
+}
+
+
+bool Storage::_declare_dependency(uint32_t hint, VkDeviceSize alloc_size) {
+  _mem_type_hint &= hint;
+  if (_mem_type_hint == 0) {
+    LOG.error("no memory type can fulfill the requirements from all storage"
+      " dependencies");
+    return false;
+  }
+  _cur_offset += alloc_size;
+  _size += alloc_size;
   return true;
+}
+bool Storage::declare_dependency(VkBuffer buf, uint32_t hint,
+  VkDeviceSize alloc_size) {
+  _deps.emplace_back(buf, _cur_offset);
+  return _declare_dependency(hint, alloc_size);
+}
+bool Storage::declare_dependency(VkImage img, uint32_t hint,
+  VkDeviceSize alloc_size) {
+  _deps.emplace_back(img, _cur_offset);
+  return _declare_dependency(hint, alloc_size);
 }
 
 //
 // DeviceOnlyStorage -----------------------------------------------------------
 //L
 
-DeviceOnlyStorage::DeviceOnlyStorage(StorageMeasure size) :
-  Storage(size, L_STATIC DEVICE_ONLY_FALLBACKS) {}
+DeviceOnlyStorage::DeviceOnlyStorage() :
+  Storage(L_STATIC DEVICE_ONLY_FALLBACKS) {}
 
 //
 // StagingStorage --------------------------------------------------------------
 //L
 
-StagingStorage::StagingStorage(StorageMeasure size, StorageOptimization opt) :
-  Storage(size, L_STATIC get_fallbacks(opt)) {}
+StagingStorage::StagingStorage(StorageOptimization opt) :
+  Storage(L_STATIC get_fallbacks(opt)) {}
 
 bool StagingStorage::send(const void* src,
   StorageMeasure dst_offset, StorageMeasure size) {
@@ -200,7 +271,7 @@ bool StagingStorage::fetch(L_OUT void* dst,
   auto dev = ctxt().dev();
   auto dev_mem = this->dev_mem();
   // Invalidate mapped memory before read if the memory is not coherent.
-  if ((props() & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+  if (!((props() & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))) {
     VkMappedMemoryRange mmr {};
     mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
     mmr.memory = dev_mem;
@@ -273,7 +344,6 @@ StorageBufferView StorageBuffer::view(
 
 StorageBuffer::StorageBuffer(StorageMeasure size, VkBufferUsageFlags usage) :
   _storage(nullptr),
-  _offset(0),
   _size(size),
   _buf(VK_NULL_HANDLE),
   _usage(usage) {
@@ -303,6 +373,18 @@ bool StorageBuffer::context_changed() {
     LOG.error("unable to create buffer");
     return false;
   }
+
+  VkMemoryRequirements mr;
+  vkGetBufferMemoryRequirements(ctxt().dev(), _buf, &mr);
+  if (_storage == nullptr) {
+    LOG.error("buffer must bind with a storage to be used");
+    return false;
+  }
+  if (!_storage->declare_dependency(_buf, mr.memoryTypeBits, mr.size)) {
+    LOG.error("unable to declare dependency");
+    return false;
+  }
+
   return true;
 }
 
@@ -313,25 +395,8 @@ VkBuffer StorageBuffer::buf() const {
   return _buf;
 }
 
-bool StorageBuffer::bind(Storage& storage, StorageMeasure offset) {
-  if (storage.size() < alloc_size()) {
-    LOG.error("storage bound is too small to contain this buffer");
-    return false;
-  }
-  if (L_VK <- vkBindBufferMemory(
-    ctxt().dev(), _buf, storage.dev_mem(), offset)) {
-    LOG.error("unable to bind buffer to device memory");
-    return false;
-  }
+void StorageBuffer::bind(Storage& storage) {
   _storage = storage.shared_from_this();
-  _offset = offset;
-  return true;
-}
-
-size_t StorageBuffer::alloc_size() const {
-  VkMemoryRequirements mr;
-  vkGetBufferMemoryRequirements(ctxt().dev(), _buf, &mr);
-  return mr.size;
 }
 
 //
@@ -362,6 +427,7 @@ bool StorageImageView::context_changed() {
   ivci.format = _img->format();
   ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
   ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  ivci.subresourceRange.levelCount = 1;
   ivci.subresourceRange.layerCount = _img->nlayer().value_or(1);
 
   if (L_VK <- vkCreateImageView(ctxt().dev(), &ivci, nullptr, &_img_view)) {
@@ -386,19 +452,19 @@ const VkExtent2D& StorageImageView::extent() const {
 std::optional<uint32_t> StorageImageView::nlayer() const {
   return _img->nlayer();
 }
-VkImageLayout StorageImageView::preferred_layout() const {
-  return _img->preferred_layout();
-}
 VkImageMemoryBarrier StorageImageView::barrier(
-  VkAccessFlags src, VkAccessFlags dst) const {
+  VkAccessFlags src, VkAccessFlags dst,
+  VkImageLayout srcLayout, VkImageLayout dstLayout) const {
   VkImageMemoryBarrier imb {};
   imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
   imb.image = img();
-  imb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  imb.newLayout = preferred_layout();
+  imb.oldLayout = srcLayout;
+  imb.newLayout = dstLayout;
   imb.srcAccessMask = src;
   imb.dstAccessMask = dst;
   imb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  imb.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
+  imb.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
   return imb;
 }
 
@@ -421,16 +487,13 @@ VkBufferImageCopy StorageImageView::copy_with_buffer(
 
 StorageImage::StorageImage(
   const VkExtent2D& extent, std::optional<uint32_t> nlayer,
-  VkFormat format, VkImageUsageFlags usage,
-  VkImageLayout layout, VkImageTiling tiling) :
+  VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling) :
   _img(VK_NULL_HANDLE),
   _storage(nullptr),
-  _offset(0),
   _extent(extent),
   _nlayer(nlayer),
   _format(format),
   _usage(usage),
-  _layout(layout),
   _tiling(tiling) {
 }
 
@@ -461,6 +524,17 @@ bool StorageImage::context_changed() {
     LOG.error("unable to create image");
     return false;
   }
+  
+  VkMemoryRequirements mr {};
+  vkGetImageMemoryRequirements(ctxt().dev(), _img, &mr);
+  if (_storage == nullptr) {
+    LOG.error("image must bind with a storage to be used");
+    return false;
+  }
+  if (!_storage->declare_dependency(_img, mr.memoryTypeBits, mr.size)) {
+    LOG.error("unable to declare dependency");
+    return false;
+  }
 
   return true;
 }
@@ -477,9 +551,6 @@ const VkExtent2D& StorageImage::extent() const{
 VkImage StorageImage::img() const {
   return _img;
 }
-VkImageLayout StorageImage::preferred_layout() const {
-  return _layout;
-}
 std::optional<uint32_t> StorageImage::nlayer() const {
   return _nlayer;
 }
@@ -491,28 +562,17 @@ VkFormat StorageImage::format() const {
   return _format;
 }
 
-size_t StorageImage::alloc_size() const {
-  // FIXME: (penguinliong) Make it more generalized.
-  VkMemoryRequirements mr {};
-  vkGetImageMemoryRequirements(ctxt().dev(), _img, &mr);
-  return mr.size;
-}
-
-bool StorageImage::bind(Storage& storage, size_t offset) {
-  if (L_VK <- vkBindImageMemory(ctxt().dev(), _img,
-    storage.dev_mem(), offset)) {
-    LOG.error("unable to bind image to device memory");
-    return false;
-  }
+void StorageImage::bind(Storage& storage) {
   _storage = storage.shared_from_this();
-  _offset = offset;
 }
-StorageImageView StorageImage::view() {
-  return { shared_from_this(), { 0, 0 }, _extent };
+std::shared_ptr<StorageImageView> StorageImage::view() {
+  return ctxt().make_contextual<StorageImageView>(
+    shared_from_this(), VkOffset2D{ 0, 0 }, _extent);
 }
-StorageImageView StorageImage::view(const VkOffset2D& offset,
+std::shared_ptr<StorageImageView> StorageImage::view(const VkOffset2D& offset,
   const VkExtent2D& extent) {
-  return { shared_from_this(), offset, extent };
+  return ctxt().make_contextual<StorageImageView>(
+    shared_from_this(), offset, extent);
 }
 
 // StagingStorageImage ---------------------------------------------------------
@@ -521,7 +581,6 @@ StagingStorageImage::StagingStorageImage(
   const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
   StorageImage(extent, nlayer, format,
     VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_IMAGE_LAYOUT_GENERAL,
     VK_IMAGE_TILING_LINEAR) {}
 
 StorageImageView StagingStorageImage::view(
@@ -536,7 +595,6 @@ ColorAttachmentStorageImage::ColorAttachmentStorageImage(
   const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
   StorageImage(extent, nlayer, format,
     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     VK_IMAGE_TILING_OPTIMAL) {}
 
 // UniformStorageImage ---------------------------------------------------------
@@ -545,7 +603,6 @@ UniformStorageImage::UniformStorageImage(
   const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
   StorageImage(extent, nlayer, format,
     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     VK_IMAGE_TILING_OPTIMAL) {}
 
 L_CUVK_END_

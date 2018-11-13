@@ -233,7 +233,6 @@ bool Context::select_phys_dev(const PhysicalDeviceInfo& pdi) {
 void Context::invalidate() {
   for (auto it = _rg.rbegin(); it != _rg.rend(); ++it) {
     (*it)->context_changing();
-    (*it)->_ctxt = nullptr;
   }
   _mem_types.clear();
   _mem_heaps.clear();
@@ -287,14 +286,18 @@ std::string translate_mem_props(VkMemoryPropertyFlags props) {
   return out;
 }
 
-uint32_t Context::find_mem_type(VkMemoryPropertyFlags flags) const {
-  auto i = static_cast<uint32_t>(_mem_types.size());
-  while (i--) {
-    const auto& cur = _mem_types[i];
-    if (cur.propertyFlags == flags) {
-      LOG.debug("found memory type {}", translate_mem_props(flags));
-      return i;
+uint32_t Context::find_mem_type(uint32_t hint,
+  VkMemoryPropertyFlags flags) const {
+  auto n = static_cast<uint32_t>(_mem_types.size());
+  for (auto i = 0; i < n; ++i) {
+    if (hint & 1) {
+      const auto& cur = _mem_types[i];
+      if (cur.propertyFlags == flags) {
+        LOG.debug("found memory type {}", translate_mem_props(flags));
+        return i;
+      }
     }
+    hint >>= 1;
   }
   LOG.debug("unable to find requested memory type {}",
     translate_mem_props(flags));

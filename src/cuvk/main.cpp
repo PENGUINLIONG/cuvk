@@ -20,7 +20,6 @@ void select_phys_dev(Context& ctxt) {
 
 int main() {
   auto ctxt = std::make_shared<Context>();
-  select_phys_dev(*ctxt);
 
   //
   // Deformation
@@ -45,24 +44,64 @@ int main() {
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   auto deform_out_buf = ctxt->make_contextual<StorageBuffer>(
     deform_out_size,
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-
-
-  StorageMeasure deform_in_alloc_size =
-    [deform_in_buf]{ return deform_in_buf->alloc_size(); };
-  StorageMeasure deform_out_alloc_size =
-    [deform_out_buf]{ return deform_out_buf->alloc_size(); };
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 
   auto deform_in_mem = ctxt->make_contextual<StagingStorage>(
-    deform_in_alloc_size,
     StorageOptimization::Send);
   auto deform_out_mem = ctxt->make_contextual<StagingStorage>(
-    deform_out_alloc_size,
     StorageOptimization::Fetch);
 
   deform_in_buf->bind(*deform_in_mem);
   deform_out_buf->bind(*deform_out_mem);
 
+
+
+  //
+  // Evaluation
+  //
+
+  auto eval = ctxt->make_contextual<Evaluation>(360, 240, 1);
+
+  auto real_univ = ctxt->make_contextual<UniformStorageImage>(
+    VkExtent2D{ 360, 240 }, std::nullopt, VK_FORMAT_R32_SFLOAT);
+  auto real_univ_mem = ctxt->make_contextual<DeviceOnlyStorage>();
+  real_univ->bind(*real_univ_mem);
+  auto real_univ_view = real_univ ->view();
+  
+  auto real_univ_buf = ctxt->make_contextual<StorageBuffer>(
+    (StorageMeasure)[=]{ return real_univ->size(); },
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+  auto real_univ_buf_mem = ctxt->make_contextual<StagingStorage>(
+    StorageOptimization::Send);
+  real_univ_buf->bind(*real_univ_buf_mem);
+
+
+  auto sim_univs = ctxt->make_contextual<ColorAttachmentStorageImage>(
+    VkExtent2D{ 360, 240 }, 1, VK_FORMAT_R32_SFLOAT);
+  auto sim_univs_mem = ctxt->make_contextual<DeviceOnlyStorage>();
+  sim_univs->bind(*sim_univs_mem);
+  auto sim_univs_view = sim_univs->view();
+
+  auto sim_univs_buf = ctxt->make_contextual<StorageBuffer>(
+    (StorageMeasure)[=]{ return sim_univs->size(); },
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+  auto sim_univs_buf_mem = ctxt->make_contextual<StagingStorage>(
+    StorageOptimization::Fetch);
+  sim_univs_buf->bind(*sim_univs_buf_mem);
+
+  auto cost_buf = ctxt->make_contextual<StorageBuffer>(
+    (StorageMeasure)[=]{ return sizeof(float); },
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+  auto cost_buf_mem = ctxt->make_contextual<StagingStorage>(
+    StorageOptimization::Fetch);
+  cost_buf->bind(*cost_buf_mem);
+
+
+
+
+  select_phys_dev(*ctxt);
+
+  
   // Set up input data.
   DeformSpecs spec;
   spec.rotate = 1.;
@@ -72,7 +111,7 @@ int main() {
 
   Bacterium bac;
   bac.orient = 1.;
-  bac.pos = { 2., 3. };
+  bac.pos = { 0., 0. };
   bac.size = { 4., 5. };
   deform_in_mem->send(&bac, specs_aligned, sizeof(Bacterium));
 
@@ -92,63 +131,22 @@ int main() {
     bac_out.size[0], bac_out.size[1]);
 
 
-
-  //
-  // Evaluation
-  //
-
-  auto eval = ctxt->make_contextual<Evaluation>(360, 240, 1);
-
-  auto real_univ = ctxt->make_contextual<UniformStorageImage>(
-    VkExtent2D{ 360, 240 }, std::nullopt, VK_FORMAT_R32_SFLOAT);
-  auto real_univ_mem = ctxt->make_contextual<StagingStorage>(
-    (StorageMeasure)[=]{ return real_univ->alloc_size(); },
-    StorageOptimization::Send);
-  real_univ->bind(*real_univ_mem, 0);
-  
-  auto real_univ_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return real_univ->size(); },
-    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-  auto real_univ_buf_mem = ctxt->make_contextual<StagingStorage>(
-    (StorageMeasure)[=]{ return real_univ_buf->alloc_size(); },
-    StorageOptimization::Send);
-  real_univ_buf->bind(*real_univ_buf_mem, 0);
-
-
-  auto sim_univs = ctxt->make_contextual<ColorAttachmentStorageImage>(
-    VkExtent2D{ 360, 240 }, 1, VK_FORMAT_R32_SFLOAT);
-  auto sim_univs_mem = ctxt->make_contextual<DeviceOnlyStorage>(
-    (StorageMeasure)[=]{ return sim_univs->alloc_size(); });
-  sim_univs->bind(*sim_univs_mem, 0);
-
-  auto sim_univs_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return sim_univs->size(); },
-    VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  auto sim_univs_buf_mem = ctxt->make_contextual<StagingStorage>(
-    (StorageMeasure)[=]{ return sim_univs_buf->alloc_size(); },
-    StorageOptimization::Fetch);
-  sim_univs_buf->bind(*sim_univs_buf_mem, 0);
-
-  auto cost_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return sizeof(float); },
-    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-  auto cost_buf_mem = ctxt->make_contextual<StagingStorage>(
-    (StorageMeasure)[=]{ return cost_buf->alloc_size(); },
-    StorageOptimization::Fetch);
-  cost_buf->bind(*cost_buf_mem, 0);
-
   std::vector<char> buf(sim_univs_buf->size(), 0);
 
   real_univ_buf_mem->send(buf.data(), 0, buf.size());
 
-  eval->execute(deform_in_buf->view(),
+  eval->execute(deform_out_buf->view(),
     real_univ_buf->view(),
-    real_univ->view(),
+    *real_univ_view,
     sim_univs_buf->view(),
-    sim_univs->view(),
+    *sim_univs_view,
     cost_buf->view());
 
-  cost_buf_mem->fetch(buf.data(), 0, cost_buf->size());
+  sim_univs_buf_mem->fetch(buf.data(), 0, buf.size());
+
+
+
+
 
   std::getc(stdin);
   return 0;

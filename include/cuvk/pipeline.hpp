@@ -33,7 +33,7 @@ protected:
 public:
   using LayoutBinding = VkDescriptorSetLayoutBinding;
 
-  PipelineContextual() = default;
+  PipelineContextual();
 
   virtual const std::vector<LayoutBinding>& layout_binds() const = 0;
 

@@ -84,7 +84,7 @@ public:
 
   const VkPhysicalDeviceLimits& limits() const;
 
-  uint32_t find_mem_type(VkMemoryPropertyFlags flags) const;
+  uint32_t find_mem_type(uint32_t hint, VkMemoryPropertyFlags flags) const;
   const std::vector<VkMemoryHeap>& get_mem_heap() const;
 
   uint32_t get_queue_fam_idx(ExecType ty) const;
@@ -100,12 +100,6 @@ public:
   std::shared_ptr<T> make_contextual(TArgs&& ... args) {
     auto rv = std::make_shared<T>(std::forward<TArgs>(args) ...);
     rv->_ctxt = shared_from_this();
-    // Invalidate the context if the context is unable to allocate resoureces
-    // for the new contextual object.
-    if (!rv->context_changed()) {
-      invalidate();
-      return nullptr;
-    }
     _rg.push_back(rv.get());
 
     return rv;

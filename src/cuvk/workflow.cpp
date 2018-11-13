@@ -373,36 +373,71 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     }
   }
 
+  /* Sync input bacteria. */ {
+    VkBufferMemoryBarrier bmb = bacs.barrier(
+      VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_HOST_BIT,
+      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+      0,
+      0, nullptr,
+      1, &bmb,
+      0, nullptr);
+  }
+
   /* Sync to ensure all bacteria data and the real universe are written to
      device memory. */ {
-    std::array<VkBufferMemoryBarrier, 2> bmbs {};
-    bmbs[0] = bacs.barrier(
-      VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
-    bmbs[1] = real_univ_buf.barrier(
+    VkBufferMemoryBarrier bmb = real_univ_buf.barrier(
       VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-
 
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_HOST_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, // No dependency flags.
       0, nullptr,
-      bmbs.size(), bmbs.data(),
+      1, &bmb,
       0, nullptr);
+  }
+
+  /* Sync again to ensure buffer data is fully written to the image object. */ {
+    auto imb = real_univ.barrier(
+      0, VK_ACCESS_TRANSFER_WRITE_BIT,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT,
+      0,
+      0, nullptr,
+      0, nullptr,
+      1, &imb);
   }
 
   /* Transfer real universe's pixel data to image. */ {
     auto bic = real_univ.copy_with_buffer(real_univ_buf);
     vkCmdCopyBufferToImage(cmd_buf, real_univ_buf.buf(), real_univ.img(),
-      real_univ.preferred_layout(), 1, &bic);
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
   }
 
   /* Sync again to ensure buffer data is fully written to the image object. */ {
     auto imb = real_univ.barrier(
-      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
-      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+      0,
+      0, nullptr,
+      0, nullptr,
+      1, &imb);
+  }
+
+  /* Invalidate previous simulation results. */ {
+    auto imb = sim_univs.barrier(
+      0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd_buf,
+      VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
       0,
       0, nullptr,
       0, nullptr,
@@ -412,7 +447,7 @@ bool Evaluation::execute(const StorageBufferView& bacs,
   /* Update description. */ {
     VkDescriptorImageInfo dii {};
     dii.imageView = real_univ.img_view();
-    dii.imageLayout = real_univ.preferred_layout();
+    dii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkWriteDescriptorSet wds {};
     wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -437,7 +472,10 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     fci.height = extent.height;
     fci.layers = nlayer;
 
-    vkCreateFramebuffer(dev, &fci, nullptr, &f);
+    if (L_VK <- vkCreateFramebuffer(dev, &fci, nullptr, &f)) {
+      LOG.error("unable to create framebuffer");
+      return false;
+    }
   }
 
   /* Record render pass. */ {
@@ -452,6 +490,7 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     rpbi.renderArea.extent.height = sim_univs.extent().height;
     rpbi.clearValueCount = cv.size();
     rpbi.pClearValues = cv.data();
+    rpbi.framebuffer = f;
 
     vkCmdBeginRenderPass(cmd_buf, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -480,29 +519,30 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
       _pl_layout, 0, 1, &_desc_set, 0, nullptr);
     
-    vkCmdEndRenderPass(cmd_buf);
-  }
-
-  /* Dispatch render pass. */ {
     vkCmdDraw(cmd_buf, bacs.size(), 1, 0, 0);
+    vkCmdEndRenderPass(cmd_buf);
   }
 
   /* Sync for transfer to output buffer. */ {
     auto imb = sim_univs.barrier(
-      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+      // TODO: (penguinliong) Why this is not VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL?
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    auto bmb = sim_univs_buf.barrier(0, VK_ACCESS_TRANSFER_WRITE_BIT);
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       0,
       0, nullptr,
-      0, nullptr,
+      1, &bmb,
       1, &imb);
   }
 
   /* Transfer data to output buffer. */ {
     auto bic = sim_univs.copy_with_buffer(sim_univs_buf);
     vkCmdCopyImageToBuffer(cmd_buf, sim_univs.img(),
-      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, sim_univs_buf.buf(), 1, &bic);
+      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sim_univs_buf.buf(), 1, &bic);
   }
 
   /* Sync for host to read. */ {
@@ -529,16 +569,34 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
     VkFence fence;
-    vkCreateFence(dev, &fci, nullptr, &fence);
+    if (L_VK <- vkCreateFence(dev, &fci, nullptr, &fence)) {
+      LOG.error("unable to create fence");
+      return false;
+    }
 
     VkQueue queue = ctxt().get_queue(ExecType::Graphics);
 
-    vkQueueWaitIdle(queue);
+    if (L_VK <- vkQueueWaitIdle(queue)) {
+      LOG.error("failed to wait graphics queue to be idle");
+      return false;
+    }
+
+    VkPipelineStageFlags psf = VK_PIPELINE_STAGE_TRANSFER_BIT;
 
     VkSubmitInfo si {};
-    vkQueueSubmit(queue, 1, &si, fence);
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd_buf;
+    si.pWaitDstStageMask = &psf;
+    if (L_VK <- vkQueueSubmit(queue, 1, &si, fence)) {
+      LOG.error("unable to submit queue");
+      return false;
+    }
     // TODO: (penguinliong) Use constants.
-    vkWaitForFences(dev, 1, &fence, VK_TRUE, 5'000'000);
+    if (vkWaitForFences(dev, 1, &fence, VK_TRUE, 5'000'000)) {
+      LOG.error("fence timed out");
+      return false;
+    }
   }
 
   vkFreeCommandBuffers(dev, cmd_pool, 1, &cmd_buf);

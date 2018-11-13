@@ -20,6 +20,13 @@ const uint32_t* Spirv::data() const {
   return _code.data();
 }
 
+PipelineContextual::PipelineContextual() :
+  _desc_set_layout(VK_NULL_HANDLE),
+  _desc_pool(VK_NULL_HANDLE),
+  _desc_set(VK_NULL_HANDLE),
+  _pl_layout(VK_NULL_HANDLE),
+  _pl(VK_NULL_HANDLE) {}
+
 bool PipelineContextual::create_shader_module(
     const Spirv& spv, L_OUT VkShaderModule& mod) const {
   VkShaderModuleCreateInfo smci{};
@@ -172,7 +179,9 @@ void ComputeShaderContextual::destroy_pl() {
 
 GraphicsShaderContextual::GraphicsShaderContextual(
   uint32_t rows, uint32_t cols, uint32_t layers) :
-  _rows(rows), _cols(cols), _layers(layers) { }
+  _mods{ VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE },
+  _rows(rows), _cols(cols), _layers(layers),
+  _pass(VK_NULL_HANDLE) { }
 
 VkRenderPass GraphicsShaderContextual::render_pass() const {
   return _pass;
