@@ -262,7 +262,12 @@ std::vector<Evaluation::Attribute> Evaluation::_in_attrs = {
 };
 std::vector<Evaluation::Blend> Evaluation::_out_blends = {
   VkPipelineColorBlendAttachmentState
-  {},
+  {
+    VK_FALSE,
+    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX,
+    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX,
+    0xF
+  },
 };
 std::vector<Evaluation::Attachment> Evaluation::_out_attaches = {
   VkAttachmentDescription
@@ -361,6 +366,8 @@ bool Evaluation::execute(const StorageBufferView& bacs,
       return false;
     }
   }
+
+  auto nbac = bacs.size() / sizeof(shader_interface::Bacterium);
 
   /* Start recording commands. */ {
     VkCommandBufferBeginInfo cbbi {};
@@ -505,8 +512,6 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     VkRect2D scissor = {};
     scissor.extent.width = extent.width;
     scissor.extent.height = extent.height;
-    scissor.offset.x = 0;
-    scissor.offset.y = 0;
 
     vkCmdSetScissor(cmd_buf, 0, 1, &scissor);
 
@@ -518,25 +523,9 @@ bool Evaluation::execute(const StorageBufferView& bacs,
 
     vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
       _pl_layout, 0, 1, &_desc_set, 0, nullptr);
-    
-    vkCmdDraw(cmd_buf, bacs.size(), 1, 0, 0);
-    vkCmdEndRenderPass(cmd_buf);
-  }
 
-  /* Sync for transfer to output buffer. */ {
-    auto imb = sim_univs.barrier(
-      VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
-      // TODO: (penguinliong) Why this is not VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL?
-      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    auto bmb = sim_univs_buf.barrier(0, VK_ACCESS_TRANSFER_WRITE_BIT);
-    vkCmdPipelineBarrier(cmd_buf,
-      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-      VK_PIPELINE_STAGE_TRANSFER_BIT,
-      0,
-      0, nullptr,
-      1, &bmb,
-      1, &imb);
+    vkCmdDraw(cmd_buf, nbac, 1, 0, 0);
+    vkCmdEndRenderPass(cmd_buf);
   }
 
   /* Transfer data to output buffer. */ {
