@@ -475,7 +475,7 @@ VkBufferImageCopy StorageImageView::copy_with_buffer(
   bic.bufferOffset = buf.offset();
   bic.bufferRowLength = _extent.width;
   bic.bufferImageHeight = _extent.height;
-  bic.imageExtent = { _extent.width, _extent.height, layer };
+  bic.imageExtent = { _extent.width, _extent.height, 1 };
   bic.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   bic.imageSubresource.layerCount = layer;
   return bic;

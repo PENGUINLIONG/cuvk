@@ -49,16 +49,17 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
   auto cmd_pool = ctxt().get_cmd_pool(ExecType::Compute);
 
   VkCommandBuffer cmd_buf;
-  // Ensure that the output buffer is larger than or as large as the input
-  // bacteria buffer.
-  if (bacs_out.size() < bacs.size()) {
-    LOG.error("output buffer must be able to contain the result data");
-    return false;
-  }
 
   // Calculate number of specs and bacteria provided.
   size_t nspec = deform_specs.size() / sizeof(shader_interface::DeformSpecs);
   size_t nbac = bacs.size() / sizeof(shader_interface::Bacterium);
+  
+  // Ensure that the output buffer is larger than or as large as the input
+  // bacteria buffer.
+  if (bacs_out.size() / sizeof(shader_interface::Bacterium) < nbac * nspec) {
+    LOG.error("output buffer must be able to contain the result data");
+    return false;
+  }
 
   /* Allocate command buffer. */ {
     VkCommandBufferAllocateInfo cbai {};
@@ -164,6 +165,7 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
   }
 
   /* Dispatch deformation. */ {
+    // TODO: (penguinliong) Push constants.
     vkCmdDispatch(cmd_buf,
       static_cast<uint32_t>(nspec),
       static_cast<uint32_t>(nbac),
@@ -211,13 +213,10 @@ bool Deformation::execute(const StorageBufferView& deform_specs,
 
     vkResetFences(dev, 1, &fence);
 
-    VkPipelineStageFlags psf = VK_PIPELINE_STAGE_TRANSFER_BIT;
-
     VkSubmitInfo si {};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd_buf;
-    si.pWaitDstStageMask = &psf;
 
     VkQueue queue = ctxt().get_queue(ExecType::Compute);
 
@@ -273,8 +272,8 @@ std::vector<Evaluation::Attachment> Evaluation::_out_attaches = {
   VkAttachmentDescription
   {
     0, VK_FORMAT_R32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-    VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-    VK_ATTACHMENT_STORE_OP_DONT_CARE,
+    VK_ATTACHMENT_LOAD_OP_CLEAR,
+    VK_ATTACHMENT_STORE_OP_STORE,
     VK_ATTACHMENT_LOAD_OP_DONT_CARE,
     VK_ATTACHMENT_STORE_OP_DONT_CARE,
     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -347,12 +346,27 @@ bool Evaluation::execute(const StorageBufferView& bacs,
   auto dev = ctxt().dev();
   auto cmd_pool = ctxt().get_cmd_pool(ExecType::Graphics);
 
-
   VkCommandBuffer cmd_buf;
   VkFramebuffer f;
 
   VkExtent2D extent = real_univ.extent();
   uint32_t nlayer = sim_univs.nlayer().value_or(1);
+
+  VkImageView iv = sim_univs.img_view();
+
+  VkFramebufferCreateInfo fci {};
+  fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  fci.renderPass = render_pass();
+  fci.attachmentCount = 1;
+  fci.pAttachments = &iv;
+  fci.width = extent.width;
+  fci.height = extent.height;
+  fci.layers = nlayer;
+
+  if (L_VK <- vkCreateFramebuffer(dev, &fci, nullptr, &f)) {
+    LOG.error("unable to create framebuffer");
+    return false;
+  }
 
   /* Allocate command buffer. */ {
     VkCommandBufferAllocateInfo cbai {};
@@ -392,11 +406,9 @@ bool Evaluation::execute(const StorageBufferView& bacs,
       0, nullptr);
   }
 
-  /* Sync to ensure all bacteria data and the real universe are written to
-     device memory. */ {
+  /* Sync to ensure the real universe are written to device memory. */ {
     VkBufferMemoryBarrier bmb = real_univ_buf.barrier(
       VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
-
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_HOST_BIT,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
@@ -425,10 +437,10 @@ bool Evaluation::execute(const StorageBufferView& bacs,
       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
   }
 
-  /* Sync again to ensure buffer data is fully written to the image object. */ {
+  /* Sync again to real universe data is fully written to the image object. */ {
     auto imb = real_univ.barrier(
       VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
-      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
     vkCmdPipelineBarrier(cmd_buf,
       VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
@@ -467,27 +479,9 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     vkUpdateDescriptorSets(dev, 1, &wds, 0, nullptr);
   }
 
-  /* Prepare framebuffer. */ {
-    VkImageView iv = sim_univs.img_view();
-
-    VkFramebufferCreateInfo fci {};
-    fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fci.renderPass = render_pass();
-    fci.attachmentCount = 1;
-    fci.pAttachments = &iv;
-    fci.width = extent.width;
-    fci.height = extent.height;
-    fci.layers = nlayer;
-
-    if (L_VK <- vkCreateFramebuffer(dev, &fci, nullptr, &f)) {
-      LOG.error("unable to create framebuffer");
-      return false;
-    }
-  }
-
   /* Record render pass. */ {
     std::array<VkClearValue, 2> cv;
-    cv[0].color = { { 0., 0., 0., 1. } };
+    cv[0].color = { { 1., 1., 1., 1. } };
     cv[1].depthStencil = { 1., 0 };
 
     VkRenderPassBeginInfo rpbi {};
@@ -524,6 +518,7 @@ bool Evaluation::execute(const StorageBufferView& bacs,
     vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS,
       _pl_layout, 0, 1, &_desc_set, 0, nullptr);
 
+    // TODO: (penguinliong) Push constants.
     vkCmdDraw(cmd_buf, nbac, 1, 0, 0);
     vkCmdEndRenderPass(cmd_buf);
   }
@@ -570,13 +565,10 @@ bool Evaluation::execute(const StorageBufferView& bacs,
       return false;
     }
 
-    VkPipelineStageFlags psf = VK_PIPELINE_STAGE_TRANSFER_BIT;
-
     VkSubmitInfo si {};
     si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd_buf;
-    si.pWaitDstStageMask = &psf;
     if (L_VK <- vkQueueSubmit(queue, 1, &si, fence)) {
       LOG.error("unable to submit queue");
       return false;
@@ -586,8 +578,11 @@ bool Evaluation::execute(const StorageBufferView& bacs,
       LOG.error("fence timed out");
       return false;
     }
+
+    vkDestroyFence(dev, fence, nullptr);
   }
 
+  vkDestroyFramebuffer(dev, f, nullptr);
   vkFreeCommandBuffers(dev, cmd_pool, 1, &cmd_buf);
 
   return false;

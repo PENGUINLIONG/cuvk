@@ -103,16 +103,17 @@ int main() {
 
   
   // Set up input data.
-  DeformSpecs spec;
+  DeformSpecs spec {};
   spec.rotate = 1.;
   spec.stretch = { 1., 1. };
   spec.translate = { 1., 1. };
   deform_in_mem->send(&spec, 0, sizeof(DeformSpecs));
 
-  Bacterium bac;
+  Bacterium bac {};
   bac.orient = 1.;
   bac.pos = { 0., 0. };
   bac.size = { 4., 5. };
+  bac.univ = 0;
   deform_in_mem->send(&bac, specs_aligned, sizeof(Bacterium));
 
   // Dispatch deformation.
@@ -131,7 +132,7 @@ int main() {
     bac_out.size[0], bac_out.size[1]);
 
 
-  std::vector<char> buf(sim_univs_buf->size(), 0);
+  std::vector<char> buf(sim_univs_buf->size(), 0.1);
 
   real_univ_buf_mem->send(buf.data(), 0, buf.size());
 
