@@ -241,4 +241,90 @@ public:
     const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format);
 };
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+struct BufferAllocationRequirements {
+  VkDeviceSize size;
+  VkBufferUsageFlags usage;
+  StorageOptimization opt;
+};
+struct BufferAllocationInfo {
+  uint32_t mem_type_idx;
+  VkDeviceSize offset;
+  VkBuffer buf;
+};
+using BufferAllocation = std::shared_ptr<BufferAllocationInfo>;
+
+
+
+struct ImageAllocationRequirements {
+  VkExtent2D extent;
+  VkImageUsageFlags usage;
+  std::optional<uint32_t> nlayer;
+  VkFormat format;
+  VkImageTiling tiling;
+  StorageOptimization opt;
+};
+struct ImageAllocationInfo {
+  uint32_t mem_type_idx;
+  VkDeviceSize offset;
+  VkImage img;
+};
+using ImageAllocation = std::shared_ptr<ImageAllocationInfo>;
+
+
+
+class HeapManager : public Contextual {
+private:
+  bool create_rscs();
+  bool alloc_mem();
+  bool bind_rscs();
+
+public:
+  struct BufAlloc {
+    BufferAllocation alloc;
+    BufferAllocationRequirements req;
+  };
+  struct ImgAlloc {
+    ImageAllocation alloc;
+    ImageAllocationRequirements req;
+  };
+  struct HeapAlloc {
+    VkDeviceSize alloc_size;
+    VkDeviceMemory dev_mem;
+  };
+
+  std::array<HeapAlloc, VK_MAX_MEMORY_TYPES> _heap_allocs;
+  std::vector<BufAlloc> _buf_allocs;
+  std::vector<ImgAlloc> _img_allocs;
+
+  bool context_changing() override;
+  bool context_changed() override;
+
+  BufferAllocation declare_buf(size_t size, VkBufferUsageFlags usage,
+    StorageOptimization opt);
+  ImageAllocation declare_img(const VkExtent2D& extent,
+    std::optional<uint32_t> nlayer, VkFormat format, VkImageUsageFlags usage,
+    VkImageTiling tiling, StorageOptimization opt);
+};
+
+
 L_CUVK_END_

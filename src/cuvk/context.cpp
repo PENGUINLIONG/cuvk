@@ -303,6 +303,16 @@ uint32_t Context::find_mem_type(uint32_t hint,
     translate_mem_props(flags));
   return VK_MAX_MEMORY_TYPES;
 }
+uint32_t Context::find_mem_type(uint32_t hint,
+  std::vector<VkMemoryPropertyFlags> fallbacks) const {
+  for (const auto& mem_props : fallbacks) {
+    auto mem_type_idx = find_mem_type(hint, mem_props);
+    if (mem_type_idx < VK_MAX_MEMORY_TYPES) {
+      return mem_type_idx;
+    }
+  }
+  return VK_MAX_MEMORY_TYPES;
+}
 uint32_t Context::get_mem_heap_idx(uint32_t mem_type_idx) const {
   return _mem_types[mem_type_idx].heapIndex;
 }

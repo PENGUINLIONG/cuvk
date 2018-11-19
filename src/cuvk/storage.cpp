@@ -607,4 +607,216 @@ UniformStorageImage::UniformStorageImage(
     VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
     VK_IMAGE_TILING_OPTIMAL) {}
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+VkBuffer create_buf(VkDevice dev, const BufferAllocationRequirements& req) {
+  VkBufferCreateInfo bci {};
+  bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bci.size = req.size;
+  bci.usage = req.usage;
+
+  VkBuffer buf;
+  return (L_VK <- vkCreateBuffer(dev, &bci, nullptr, &buf)) ?
+    VK_NULL_HANDLE : buf;
+}
+VkImage create_img(VkDevice dev, const ImageAllocationRequirements& req) {
+  VkImageCreateInfo ici {};
+  ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  ici.format = req.format;
+  ici.extent.width = req.extent.width;
+  ici.extent.height = req.extent.height;
+  ici.extent.depth = 1;
+  ici.arrayLayers = req.nlayer.value_or(1);
+  ici.mipLevels = 1;
+  ici.samples = VK_SAMPLE_COUNT_1_BIT;
+  ici.imageType = VK_IMAGE_TYPE_2D;
+  ici.tiling = req.tiling;
+
+  VkImage img;
+  if (L_VK <- vkCreateImage(dev, &ici, nullptr, &img)) {
+    return false;
+  }
+}
+
+constexpr VkDeviceSize align_size(VkDeviceSize size, VkDeviceSize alignment) {
+  return (size + alignment - 1) / alignment * alignment;
+}
+
+bool HeapManager::create_rscs() {
+  auto dev = ctxt().dev();
+
+  // Create buffers.
+  for (auto& buf_alloc : _buf_allocs) {
+    auto buf = create_buf(dev, buf_alloc.req);
+    if (buf == VK_NULL_HANDLE) {
+      return false;
+    }
+    buf_alloc.alloc->buf = buf;
+
+    // Check memory requirements.
+    VkMemoryRequirements mem_req;
+    vkGetBufferMemoryRequirements(dev, buf, &mem_req);
+    
+    auto mem_type_idx = ctxt().find_mem_type(mem_req.memoryTypeBits,
+      get_fallbacks(buf_alloc.req.opt));
+    buf_alloc.alloc->mem_type_idx = mem_type_idx;
+
+    auto mem_heap_idx = ctxt().get_mem_heap_idx(mem_type_idx);
+    auto& alloc_size = _heap_allocs[mem_heap_idx].alloc_size;
+    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    buf_alloc.alloc->offset = offset_aligned;
+    alloc_size = offset_aligned + mem_req.size;
+  }
+
+  // Create images.
+  for (auto& img_alloc : _img_allocs) {
+    auto img = create_img(dev, img_alloc.req);
+    if (img == VK_NULL_HANDLE) {
+      return false;
+    }
+    img_alloc.alloc->img = img;
+
+    // Check memory requirements.
+    VkMemoryRequirements mem_req;
+    vkGetImageMemoryRequirements(dev, img, &mem_req);
+
+    auto mem_type_idx = ctxt().find_mem_type(mem_req.memoryTypeBits,
+      get_fallbacks(img_alloc.req.opt));
+    img_alloc.alloc->mem_type_idx = mem_type_idx;
+
+    auto mem_heap_idx = ctxt().get_mem_heap_idx(mem_type_idx);
+    auto& alloc_size = _heap_allocs[mem_heap_idx].alloc_size;
+    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    img_alloc.alloc->offset = offset_aligned;
+    alloc_size = offset_aligned + mem_req.size;
+  }
+  return true;
+}
+
+bool HeapManager::alloc_mem() {
+  auto dev = ctxt().dev();
+
+  // Allocate memory for each type.
+  for (auto i = 0; i < VK_MAX_MEMORY_TYPES; ++i) {
+    auto& heap_alloc = _heap_allocs[i];
+    if (heap_alloc.alloc_size > 0) {
+      VkMemoryAllocateInfo mai {};
+      mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      mai.allocationSize = heap_alloc.alloc_size;
+      mai.memoryTypeIndex = i;
+
+      VkDeviceMemory dev_mem;
+      if (L_VK <- vkAllocateMemory(dev, &mai, nullptr, &dev_mem)) {
+        return false;
+      }
+      heap_alloc.dev_mem = dev_mem;
+    }
+  }
+  return true;
+}
+
+bool HeapManager::bind_rscs() {
+  auto dev = ctxt().dev();
+
+  for (auto& buf_alloc : _buf_allocs) {
+    auto alloc = *buf_alloc.alloc;
+    auto dev_mem = _heap_allocs[alloc.mem_type_idx].dev_mem;
+    if (L_VK <- vkBindBufferMemory(dev, alloc.buf, dev_mem, alloc.offset)) {
+      return false;
+    }
+  }
+  for (auto& img_alloc : _img_allocs) {
+    auto alloc = *img_alloc.alloc;
+    auto dev_mem = _heap_allocs[alloc.mem_type_idx].dev_mem;
+    if (L_VK <- vkBindImageMemory(dev, alloc.img, dev_mem, alloc.offset)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool HeapManager::context_changing() {
+  auto dev = ctxt().dev();
+  for (auto& buf_alloc : _buf_allocs) {
+    vkDestroyBuffer(dev, buf_alloc.alloc->buf, nullptr);
+    buf_alloc = {};
+  }
+  for (auto& img_alloc : _img_allocs) {
+    vkDestroyImage(dev, img_alloc.alloc->img, nullptr);
+    img_alloc = {};
+  }
+  for (auto& heap_alloc : _heap_allocs) {
+    vkFreeMemory(dev, heap_alloc.dev_mem, nullptr);
+    heap_alloc = {};
+  }
+  return true;
+}
+bool HeapManager::context_changed() {
+  auto dev = ctxt().dev();
+  std::vector<BufAlloc*> delayed_allocs;
+
+  if (!create_rscs()) {
+    LOG.error("unable to create resources");
+    return false;
+  }
+  if (!alloc_mem()) {
+    LOG.error("unable to allocate memory for resources");
+    return false;
+  }
+  if (!bind_rscs()) {
+    LOG.error("unable to bind resources to memory");
+    return false;
+  }
+  return true;
+}
+
+BufferAllocation HeapManager::declare_buf(size_t size, VkBufferUsageFlags usage,
+  StorageOptimization opt) {
+  auto alloc = std::make_shared<BufferAllocationInfo>();
+  BufAlloc buf_alloc {};
+  buf_alloc.alloc = alloc;
+  buf_alloc.req.size = size;
+  buf_alloc.req.usage = usage;
+  buf_alloc.req.opt = opt;
+  _buf_allocs.emplace_back(std::move(buf_alloc));
+  return alloc;
+}
+ImageAllocation HeapManager::declare_img(const VkExtent2D& extent,
+    std::optional<uint32_t> nlayer, VkFormat format, VkImageUsageFlags usage,
+    VkImageTiling tiling, StorageOptimization opt) {
+  auto alloc = std::make_shared<ImageAllocationInfo>();
+  ImgAlloc img_alloc {};
+  img_alloc.alloc = alloc;
+  img_alloc.req.extent = extent;
+  img_alloc.req.nlayer = std::move(nlayer);
+  img_alloc.req.format = format;
+  img_alloc.req.usage = usage;
+  img_alloc.req.tiling = tiling;
+  img_alloc.req.opt = opt;
+  _img_allocs.emplace_back(std::move(img_alloc));
+  return alloc;
+}
+
 L_CUVK_END_

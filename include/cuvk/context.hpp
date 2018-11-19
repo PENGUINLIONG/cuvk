@@ -85,6 +85,8 @@ public:
   const VkPhysicalDeviceLimits& limits() const;
 
   uint32_t find_mem_type(uint32_t hint, VkMemoryPropertyFlags flags) const;
+  uint32_t find_mem_type(uint32_t hint,
+    std::vector<VkMemoryPropertyFlags> fallbacks) const;
   uint32_t get_mem_heap_idx(uint32_t mem_type_idx) const;
 
   uint32_t get_queue_fam_idx(ExecType ty) const;
