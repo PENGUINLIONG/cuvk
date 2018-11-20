@@ -1,0 +1,106 @@
+//
+// Cost Computation Shader Program (1/1)
+// -------------------------------------
+// Compute the cost of each universe.
+//L
+#version 450
+precision mediump float;
+
+
+
+//
+// Invocation
+// ----------
+//  When jobs are dispatched to this shader, the workgroup sizes should be
+//  specified as the following:
+//    x = x index from 0 to HALF of the universe width;
+//    y = y index from 0 to HALF of the universe height;
+//    z = universe ID.
+// in uvec3 gl_GlobalInvocationID;
+//L
+
+
+
+//
+// Inputs
+// ------
+//  Real universe. Must have width and height powers of 2.
+layout(r32f, binding=0) readonly
+uniform image2D real_univ;
+//  Simulated universes. Must have the same widths and heights as the real
+//  universe.
+layout(r32f, binding=1) readonly
+uniform image2DArray sim_univs;
+//  Temporary shared buffer for sum calculation. Should have length of
+//  `(UNIV_WIDTH * UNIV_HEIGHT * NUNIV / 4)`.
+layout(std430, binding=2)
+buffer sum_temp_buf {
+  float[] sum_temp;
+};
+//L
+
+//
+// Output
+// ------
+//  Costs. Must have length `NUNIV`.
+layout(std430, binding=3)
+buffer costs_buf {
+  float[] costs;
+};
+//L
+
+float sum_vec(vec4 v) {
+  return v.x + v.y + v.z + v.w;
+}
+
+float block_diff(ivec2 pos, int univ) {
+  int x = pos.x;
+  int y = pos.y;
+  vec4 real_val = vec4(
+    imageLoad(real_univ, ivec2(x    , y    )).x,
+    imageLoad(real_univ, ivec2(x + 1, y    )).x,
+    imageLoad(real_univ, ivec2(x    , y + 1)).x,
+    imageLoad(real_univ, ivec2(x + 1, y + 1)).x);
+  vec4 sim_val = vec4(
+    imageLoad(sim_univs, ivec3(x    , y    , univ)).x,
+    imageLoad(sim_univs, ivec3(x + 1, y    , univ)).x,
+    imageLoad(sim_univs, ivec3(x    , y + 1, univ)).x,
+    imageLoad(sim_univs, ivec3(x + 1, y + 1, univ)).x);
+  return sum_vec(abs(real_val - sim_val));
+}
+
+void main() {
+  ivec2 ext = imageSize(real_univ);
+  int univ = int(gl_GlobalInvocationID.z);
+  int univ_size = ext.x * ext.y;
+  int pos_offset = int(
+    gl_GlobalInvocationID.y * ext.x + gl_GlobalInvocationID.x);
+
+  // Sum up first step for all universes.
+  {
+    int offset = univ * univ_size + pos_offset;
+    sum_temp[offset] = block_diff(ivec2(gl_GlobalInvocationID.xy * 2), univ);
+    barrier();
+  }
+
+  // Now `sum_temp` is filled with values. Its size for each universe is
+  // `ext.x * ext.y / 4`.
+  int s = univ_size / 4;
+  while (s > 1) {
+    int half_s = s / 2;
+    if (pos_offset < half_s) {
+      int offset = univ * univ_size + pos_offset;
+      sum_temp[offset] += sum_temp[offset + half_s];
+      s = half_s;
+    } else if (pos_offset == half_s && (s & 1) == 1) {
+      // When the size is an odd number, the extra one should be preserved.
+      int offset = univ * univ_size + pos_offset;
+      sum_temp[offset] = sum_temp[offset + half_s];
+      s = half_s + 1;
+    }
+    barrier();
+  }
+
+  int offset = univ * univ_size;
+  costs[univ] = sum_temp[offset];
+}
