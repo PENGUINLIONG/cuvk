@@ -18,6 +18,7 @@ file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/deform.comp.spv
           ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.vert.spv
           ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.geom.spv
           ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/eval.frag.spv
+          ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/cost.comp.spv
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/assets/shaders)
 
 add_executable(cuvk ${DIR_SRCS})

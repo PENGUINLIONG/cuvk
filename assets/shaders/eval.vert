@@ -20,7 +20,7 @@ struct Bacterium {
   // Orientation of the cell, CCW from x-axis.
   float orient;
   // ID of universe the bacterium is in.
-  int univ;
+  uint univ;
 };
 //L
 
@@ -41,7 +41,7 @@ layout(location=2)
 in float orient;
 //  ID of universe the bacterium is in.
 layout(location=3)
-in int univ;
+in uint univ;
 //L
 
 

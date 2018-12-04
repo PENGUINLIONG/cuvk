@@ -1,159 +1,81 @@
-#include <cuvk/context.hpp>
-#include <cuvk/workflow.hpp>
-#include <cuvk/logger.hpp>
 #include <cuvk/shader_interface.hpp>
+#include <cuvk/cuvk.h>
+#include <cuvk/logger.hpp>
+#include <fmt/format.h>
 #include <cstdlib>
 
-using namespace cuvk;
 using namespace cuvk::shader_interface;
 
-
-void select_phys_dev(Context& ctxt) {
-  auto infos = ctxt.enum_phys_dev();
-  int idx = -1;
-  while (idx < 0 || idx >= infos.size()) {
-    idx = 0;
-    //std::scanf("%d", &idx);
-  }
-  ctxt.select_phys_dev(infos[idx]);
-}
-
 int main() {
-  auto ctxt = std::make_shared<Context>();
+  cuvkInitialize(true);
+  CuvkMemoryRequirements mem_req {};
+  mem_req.width = 16;
+  mem_req.height = 16;
+  mem_req.nbac = 1;
+  mem_req.nspec = 1;
+  mem_req.nuniv = 1;
+  mem_req.shareBacteriaBuffer = true;
+  CuvkContext ctxt;
+  cuvkCreateContext(0, mem_req, &ctxt);
 
-  //
-  // Deformation
-  //
-
-  auto deform = ctxt->make_contextual<Deformation>();
-
-  StorageMeasure deform_in_size = [ctxt]{ return 
-    ctxt->get_aligned_size(sizeof(DeformSpecs), BufferType::StorageBuffer) +
-    ctxt->get_aligned_size(sizeof(Bacterium), BufferType::StorageBuffer);
-  };
-  StorageMeasure deform_out_size = [ctxt]{ return
-    ctxt->get_aligned_size(sizeof(Bacterium), BufferType::StorageBuffer);
-  };
-
-  StorageMeasure specs_aligned = [ctxt]{ return
-    ctxt->get_aligned_size(sizeof(DeformSpecs), BufferType::StorageBuffer);
-  };
-
-  auto deform_in_buf = ctxt->make_contextual<StorageBuffer>(
-    deform_in_size,
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-  auto deform_out_buf = ctxt->make_contextual<StorageBuffer>(
-    deform_out_size,
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-
-  auto deform_in_mem = ctxt->make_contextual<StagingStorage>(
-    StorageOptimization::Send);
-  auto deform_out_mem = ctxt->make_contextual<StagingStorage>(
-    StorageOptimization::Fetch);
-
-  deform_in_buf->bind(*deform_in_mem);
-  deform_out_buf->bind(*deform_out_mem);
-
-
-
-  //
-  // Evaluation
-  //
-
-  auto eval = ctxt->make_contextual<Evaluation>(90, 60, 1);
-
-  auto real_univ = ctxt->make_contextual<UniformStorageImage>(
-    VkExtent2D{ 90, 60 }, std::nullopt, VK_FORMAT_R32_SFLOAT);
-  auto real_univ_mem = ctxt->make_contextual<DeviceOnlyStorage>();
-  real_univ->bind(*real_univ_mem);
-  auto real_univ_view = real_univ ->view();
-  
-  auto real_univ_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return real_univ->size(); },
-    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-  auto real_univ_buf_mem = ctxt->make_contextual<StagingStorage>(
-    StorageOptimization::Send);
-  real_univ_buf->bind(*real_univ_buf_mem);
-
-
-  auto sim_univs = ctxt->make_contextual<ColorAttachmentStorageImage>(
-    VkExtent2D { 90, 60 }, 1, VK_FORMAT_R32_SFLOAT);
-  auto sim_univs_mem = ctxt->make_contextual<DeviceOnlyStorage>();
-  sim_univs->bind(*sim_univs_mem);
-  auto sim_univs_view = sim_univs->view();
-
-  auto sim_univs_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return sim_univs->size(); },
-    VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  auto sim_univs_buf_mem = ctxt->make_contextual<StagingStorage>(
-    StorageOptimization::Fetch);
-  sim_univs_buf->bind(*sim_univs_buf_mem);
-
-  auto cost_buf = ctxt->make_contextual<StorageBuffer>(
-    (StorageMeasure)[=]{ return sizeof(float); },
-    VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-  auto cost_buf_mem = ctxt->make_contextual<StagingStorage>(
-    StorageOptimization::Fetch);
-  cost_buf->bind(*cost_buf_mem);
-
-
-
-
-  select_phys_dev(*ctxt);
-
-
-  // Set up input data.
   DeformSpecs spec {};
-  spec.rotate = 30. / 180.;
+  spec.rotate = 3.1415926 / 2.;
   spec.stretch = { 1., 1. };
   spec.translate = { -0.2, -0.1 };
-  deform_in_mem->send(&spec, 0, sizeof(DeformSpecs));
 
   Bacterium bac {};
-  bac.orient = 0.;
-  bac.pos = { 0., 0. };
-  bac.size = { .1, .03 };
-  bac.univ = 0;
-  deform_in_mem->send(&bac, specs_aligned, sizeof(Bacterium));
+  bac.orient = 0.5;
+  bac.pos = { 0.5, 0.5 };
+  bac.size = { 0.5, 0.5 };
+  bac.univ = 1;
 
-  // Dispatch deformation.
-  deform->execute(
-    deform_in_buf->view(0, sizeof(DeformSpecs)),
-    deform_in_buf->view(specs_aligned, sizeof(Bacterium)),
-    deform_out_buf->view());
+  Bacterium bac_out {};
 
-  Bacterium bac_out;
-  //deform_out_mem->fetch(&bac_out, 0, sizeof(Bacterium));
-  deform_out_mem->fetch(&bac_out, 0, sizeof(Bacterium));
+  DeformationInvocation deform_invoke {};
+  deform_invoke.nSpec = 1;
+  deform_invoke.nBac = 1;
+  deform_invoke.pDeformSpecs = &spec;
+  deform_invoke.pBacs = &bac;
+  deform_invoke.pBacsOut = &bac_out;
 
-  LOG.info("Deformed bactrium: orient={}, pos=({}, {}), size=({}, {})",
-    bac_out.orient,
-    bac_out.pos[0], bac_out.pos[1],
-    bac_out.size[0], bac_out.size[1]);
-
-
-  std::vector<float> buf(sim_univs_buf->size() / sizeof(float), 0.);
-
-  real_univ_buf_mem->send(buf.data(), 0, buf.size());
-
-  eval->execute(deform_out_buf->view(),
-    real_univ_buf->view(),
-    *real_univ_view,
-    sim_univs_buf->view(),
-    *sim_univs_view,
-    cost_buf->view());
-
-  sim_univs_buf_mem->fetch(buf.data(), 0, sim_univs_buf->size());
-
-
-  std::vector<uint8_t> bytes {};
-  bytes.reserve(sim_univs_buf->size() / sizeof(float));
-  LOG.info("{}", (uint64_t)bytes.data());
-  for (auto val : buf) {
-    bytes.push_back(std::round(val * 255.));
+  std::array<float, 16 * 16> real_univ;
+  for (auto& v : real_univ) {
+    v = 1.;
   }
+  /*
+  real_univ[0] = 2. / 3.;
+  real_univ[255] = 2. / 3.;
+  */
+  std::array<float, 16 * 16> sim_univ {};
 
+  float cost = 0.;
+
+  EvaluationInvocation eval_invoke {};
+  eval_invoke.baseUniv = 1;
+  eval_invoke.nBac = 1;
+  eval_invoke.nSimUniv = 1;
+  eval_invoke.pBacs = &bac;
+  eval_invoke.pCosts = &cost;
+  eval_invoke.pRealUniv = real_univ.data();
+  eval_invoke.pSimUnivs = sim_univ.data();
+  eval_invoke.realUnivSize = 16 * 16 * sizeof(float);
+
+  CuvkTask deform_task, eval_task;
+  cuvkInvokeDeformation(ctxt, &deform_invoke, &deform_task);
+  while (cuvkPoll(deform_task) == CUVK_TASK_STATUS_NOT_READY) {}
+  cuvkInvokeEvaluation(ctxt, &eval_invoke, &eval_task);
+  while (cuvkPoll(eval_task) == CUVK_TASK_STATUS_NOT_READY) {}
+
+
+
+  cuvk::LOG.trace("deformed cell: "
+    "pos=({}, {}), size=({},{}), orient={}, univ={}",
+    bac_out.pos[0], bac_out.pos[1],
+    bac_out.size[0], bac_out.size[1],
+    bac_out.orient,
+    bac_out.univ);
 
   std::getc(stdin);
+
   return 0;
 }

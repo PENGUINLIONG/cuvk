@@ -43,7 +43,7 @@ struct Bacterium {
   // Orientation of the cell, CCW from x-axis.
   float orient;
   // ID of universe the bacterium is in.
-  int univ;
+  uint univ;
 };
 //L
 
@@ -74,15 +74,12 @@ buffer bacs_out_buf {
 
 
 //
-// Constants
-// ---------
-//  Number of deform specs.
-layout(constant_id=0)
-const uint DEFORM_SPECS_SIZE = 1;
-//  Number of bacteria input.
-layout(constant_id=1)
-const uint BACS_SIZE = 1;
-//L
+// Push Constants
+// --------------
+layout(std430, push_constant) uniform DeformMeta {
+  //  Number of deform specs.
+  uint DEFORM_SPECS_SIZE;
+};
 
 
 
@@ -96,5 +93,6 @@ void main() {
   bac.pos += spec.translate;
   bac.size *= spec.stretch;
   bac.orient += spec.rotate;
-  bacs_out[bac_idx * BACS_SIZE + deform_idx] = bac;
+  bac.univ += deform_idx * DEFORM_SPECS_SIZE;
+  bacs_out[bac_idx + deform_idx * DEFORM_SPECS_SIZE] = bac;
 }

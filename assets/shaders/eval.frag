@@ -21,16 +21,6 @@ in vec4 gl_FragCoord;
 
 
 //
-// Uniform Variables
-// -----------------
-//  The real next universe.
-layout(r32f, binding=0) readonly
-uniform image2D real_univ;
-//L
-
-
-
-//
 // Output
 // ------
 //  The differences between simulated universes and the real universe.
@@ -39,7 +29,5 @@ out float sim_univ;
 //L
 
 void main() {
-  ivec2 coord = ivec2(gl_FragCoord.xy);
-  float real_val = imageLoad(real_univ, coord).x;
-  sim_univ = 1. - real_val;
+  sim_univ = 1.;
 }

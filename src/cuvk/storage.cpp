@@ -1,56 +1,17 @@
 #include "cuvk/storage.hpp"
 #include "cuvk/logger.hpp"
+#include "cuvk/context.hpp"
 #include <exception>
 
 L_CUVK_BEGIN_
 
-std::vector<VkMemoryPropertyFlags> DEVICE_ONLY_FALLBACKS ={
+std::array<VkMemoryPropertyFlags, 1> INVISIBLE_FALLBACKS ={
+  0,
+};
+std::array<VkMemoryPropertyFlags, 1> DEVICE_ONLY_FALLBACKS ={
   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 };
-
-std::vector<VkMemoryPropertyFlags> SEND_FALLBACKS ={
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-};
-
-std::vector<VkMemoryPropertyFlags> FETCH_FALLBACKS ={
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-
-  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_CACHED_BIT,
-
-  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-};
-
-std::vector<VkMemoryPropertyFlags> DUPLEX_FALLBACKS ={
+std::array<VkMemoryPropertyFlags, 5> HOST_VISIBLE_FALLBACKS ={
   VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT |
   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
   VK_MEMORY_PROPERTY_HOST_CACHED_BIT |
@@ -71,577 +32,208 @@ std::vector<VkMemoryPropertyFlags> DUPLEX_FALLBACKS ={
   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 };
 
-const std::vector<VkMemoryAllocateFlags>& get_fallbacks(
-  StorageOptimization opt) {
-  switch (opt)
+const Span<VkMemoryPropertyFlags> get_mem_prop_fallback(MemoryVisibility vis) {
+  switch (vis)
   {
-  case cuvk::StorageOptimization::Send:
-    return SEND_FALLBACKS;
-  case cuvk::StorageOptimization::Fetch:
-    return FETCH_FALLBACKS;
-  case cuvk::StorageOptimization::Duplex:
-    return DUPLEX_FALLBACKS;
-  }
-  std::terminate(); // Impossible branch.
-}
-
-//
-// StorageMeasure --------------------------------------------------------------
-//L
-
-StorageMeasure::StorageMeasure(size_t size) noexcept :
-  _fn([size]{ return size; }) {}
-StorageMeasure::StorageMeasure(const std::function<size_t()> size_fn) noexcept:
-  _fn(size_fn) {}
-
-StorageMeasure::operator size_t() const noexcept {
-  return _fn();
-}
-
-//
-// Storage ---------------------------------------------------------------------
-//L
-
-Storage::Storage(L_STATIC const std::vector<VkMemoryPropertyFlags>& fallbacks) :
-
-  _size(0),
-  _dev_mem(VK_NULL_HANDLE),
-  _props(0),
-  _fallbacks(fallbacks),
-  _mem_type_hint(0xFFFFFFFF),
-  _cur_offset(0) {}
-
-VkDeviceMemory Storage::dev_mem() const {
-  return _dev_mem;
-}
-VkMemoryPropertyFlags Storage::props() const {
-  return _props;
-}
-size_t Storage::size() const {
-  return _size;
-}
-
-bool Storage::context_changing() {
-  if (_dev_mem) {
-    vkFreeMemory(ctxt().dev(), _dev_mem, nullptr);
-    _dev_mem = VK_NULL_HANDLE;
-  }
-  _mem_type_hint = 0xFFFFFFFF;
-  _cur_offset = 0;
-  _props = 0;
-  _deps.clear();
-
-  return true;
-}
-bool Storage::context_changed() {
-  for (const auto& mem_props : _fallbacks) {
-    auto mem_type_idx = ctxt().find_mem_type(_mem_type_hint, mem_props);
-    if (mem_type_idx < VK_MAX_MEMORY_TYPES) {
-      _props = mem_props;
-      break;
-    }
-  }
-  if (!_props) {
-    LOG.error("unable to find desired memory type");
-    return false;
-  }
-
-  VkMemoryAllocateInfo mai{};
-  mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  mai.allocationSize = _size;
-  auto idx = ctxt().find_mem_type(_mem_type_hint, _props);
-  mai.memoryTypeIndex = idx;
-  if (L_VK <- vkAllocateMemory(ctxt().dev(), &mai, nullptr, &_dev_mem)) {
-    LOG.error("unable to allocate memory for storage");
-    return false;
-  }
-  LOG.info("allocated {} bytes on heap {}", _size, ctxt().get_mem_heap_idx(idx));
-
-  for (auto& dep : _deps) {
-    switch (dep.type)
-    {
-    case Dependency::Type::Buffer:
-      if (L_VK <- vkBindBufferMemory(ctxt().dev(), dep.buf,
-        _dev_mem, dep.offset)) {
-        LOG.error("unable to bind image to device memory");
-        return false;
-      }
-      return true;
-    case Dependency::Type::Image:
-      if (L_VK <- vkBindImageMemory(ctxt().dev(), dep.img,
-        _dev_mem, dep.offset)) {
-        LOG.error("unable to bind image to device memory");
-        return false;
-      }
-      return true;
-    default:
-      std::terminate();
-    }
-  }
-}
-
-Storage::Dependency::Dependency(VkBuffer buf, VkDeviceSize offset) :
-  type(Type::Buffer),
-  buf(buf),
-  offset(offset) {}
-Storage::Dependency::Dependency(VkImage img, VkDeviceSize offset) :
-  type(Type::Image),
-  img(img),
-  offset(offset) {}
-Storage::Dependency::~Dependency() {}
-
-Storage::Dependency::Dependency(Dependency&& right) :
-  type(right.type) {
-  switch (type)
-  {
-  case cuvk::Storage::Dependency::Type::Buffer:
-    buf = std::exchange(right.buf, nullptr);
-  case cuvk::Storage::Dependency::Type::Image:
-    img = std::exchange(right.img, nullptr);
+  case cuvk::MemoryVisibility::Invisible:
+    return INVISIBLE_FALLBACKS;
+  case cuvk::MemoryVisibility::DeviceOnly:
+    return DEVICE_ONLY_FALLBACKS;
+  case cuvk::MemoryVisibility::HostVisible:
+    return HOST_VISIBLE_FALLBACKS;
   default:
+    LOG.error("meet impossible branch");
     std::terminate();
   }
 }
 
 
-bool Storage::_declare_dependency(uint32_t hint, VkDeviceSize alloc_size) {
-  _mem_type_hint &= hint;
-  if (_mem_type_hint == 0) {
-    LOG.error("no memory type can fulfill the requirements from all storage"
-      " dependencies");
-    return false;
+inline uint32_t get_pixel_size(VkFormat fmt) noexcept {
+  switch (fmt) {
+  case VK_FORMAT_R32_SINT:
+    return sizeof(int32_t);
+  case VK_FORMAT_R32_UINT:
+    return sizeof(uint32_t);
+  case VK_FORMAT_R32_SFLOAT:
+    return sizeof(float);
+  case VK_FORMAT_R32G32_SFLOAT:
+    return 2 * sizeof(float);
+  case VK_FORMAT_R32G32B32A32_SFLOAT:
+    return 4 * sizeof(float);
+  default:
+    break;
   }
-  _cur_offset += alloc_size;
-  _size += alloc_size;
+  LOG.error("unsupported pixel format");
+  std::terminate();
+}
+
+constexpr VkDeviceSize align_size(
+  VkDeviceSize size, VkDeviceSize alignment) noexcept {
+  return (size + alignment - 1) / alignment * alignment;
+}
+
+
+
+bool DeviceMemorySlice::send(const void* data, size_t size) const noexcept {
+  auto dev_data = map(size);
+  if (dev_data == nullptr) { return false; }
+  // TODO: Use better memcpy.
+  std::memcpy(dev_data, data, size);
+  unmap();
   return true;
 }
-bool Storage::declare_dependency(VkBuffer buf, uint32_t hint,
-  VkDeviceSize alloc_size) {
-  _deps.emplace_back(buf, _cur_offset);
-  return _declare_dependency(hint, alloc_size);
+bool DeviceMemorySlice::fetch(L_OUT void* data, size_t size) const noexcept {
+  auto dev_data = map(size);
+  if (dev_data == nullptr) { return false; }
+  // TODO: Use better memcpy.
+  std::memcpy(data, dev_data, size);
+  unmap();
+  return true;
 }
-bool Storage::declare_dependency(VkImage img, uint32_t hint,
-  VkDeviceSize alloc_size) {
-  _deps.emplace_back(img, _cur_offset);
-  return _declare_dependency(hint, alloc_size);
-}
-
-//
-// DeviceOnlyStorage -----------------------------------------------------------
-//L
-
-DeviceOnlyStorage::DeviceOnlyStorage() :
-  Storage(L_STATIC DEVICE_ONLY_FALLBACKS) {}
-
-//
-// StagingStorage --------------------------------------------------------------
-//L
-
-StagingStorage::StagingStorage(StorageOptimization opt) :
-  Storage(L_STATIC get_fallbacks(opt)) {}
-
-bool StagingStorage::send(const void* src,
-  StorageMeasure dst_offset, StorageMeasure size) {
-  auto dev = ctxt().dev();
-  auto dev_mem = this->dev_mem();
-  void* dst;
-  if (L_VK <- vkMapMemory(dev, dev_mem, dst_offset, size, 0, &dst)) {
-    LOG.error("unable to map memory for sending");
-    return false;
+void* DeviceMemorySlice::map(size_t size) const noexcept {
+  if (size > this->size) {
+    LOG.error("memory write out of range");
+    return nullptr;
   }
-  std::memcpy(dst, src, size);
-  
-  vkUnmapMemory(dev, dev_mem);
+  auto alignment = heap_alloc->ctxt->req.phys_dev_info->phys_dev_props
+    .limits.minMemoryMapAlignment;
+  auto map_offset = offset / alignment * alignment;
+  auto partial_offset = offset - map_offset;
+  auto map_size = align_size(partial_offset + size, alignment);
 
-  // Flush memory after write, if the memory is not coherent.
-  if (!(props() & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-    VkMappedMemoryRange mmr {};
-    mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    mmr.memory = dev_mem;
-    // FIXME: (penguinliong) The offset also follow the same rule as size.
-    mmr.offset = dst_offset;
-    mmr.size = size;
-    if (L_VK <- vkFlushMappedMemoryRanges(dev, 1, &mmr)) {
-      LOG.error("unable to flush data to device");
+  void* dev_data;
+  if (L_VK <- vkMapMemory(
+    heap_alloc->ctxt->dev, heap_alloc->dev_mem,
+    map_offset, map_size, 0, &dev_data)) {
+    LOG.error("unable to map device data");
+    return nullptr;
+  }
+  return (char*)dev_data + partial_offset;
+}
+void DeviceMemorySlice::unmap() const noexcept {
+  vkUnmapMemory(heap_alloc->ctxt->dev, heap_alloc->dev_mem);
+}
+
+
+
+DeviceMemorySlice BufferSlice::dev_mem_view() const noexcept {
+  return {
+    buf_alloc->heap_alloc,
+    buf_alloc->offset + offset,
+    size
+  };
+}
+
+DeviceMemorySlice ImageSlice::dev_mem_view() const noexcept {
+  auto& req = img_alloc->req;
+  auto layer_size =
+    req.extent.width * req.extent.height * get_pixel_size(req.format);
+  return {
+    img_alloc->heap_alloc,
+    img_alloc->offset + base_layer * layer_size,
+    nlayer.value_or(1) * layer_size,
+  };
+}
+
+
+
+BufferView::BufferView(const BufferSlice& slice, VkFormat format) noexcept :
+  buf_slice(slice),
+  format(format),
+  buf_view(VK_NULL_HANDLE) {}
+bool BufferView::make() noexcept {
+  if (buf_slice.buf_alloc->req.usage &
+    (VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+     VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)) {
+    VkBufferViewCreateInfo bvci {};
+    bvci.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+    bvci.buffer = buf_slice.buf_alloc->buf;
+    bvci.format = format;
+    bvci.offset = buf_slice.offset;
+    bvci.range = buf_slice.size;
+
+    if (L_VK <- vkCreateBufferView(
+      buf_slice.buf_alloc->ctxt->dev, &bvci, nullptr, &buf_view)) {
+      LOG.error("unable to create texel buffer view");
       return false;
     }
   }
   return true;
 }
-bool StagingStorage::fetch(L_OUT void* dst,
-  StorageMeasure src_offset, StorageMeasure size) {
-  auto dev = ctxt().dev();
-  auto dev_mem = this->dev_mem();
-  // Invalidate mapped memory before read if the memory is not coherent.
-  if (!((props() & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))) {
-    VkMappedMemoryRange mmr {};
-    mmr.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    mmr.memory = dev_mem;
-    mmr.offset = src_offset;
-    if (size < ctxt().limits().nonCoherentAtomSize) {
-      mmr.size = VK_WHOLE_SIZE;
-    } else {
-      mmr.size = size;
-    }
-    if (L_VK <- vkInvalidateMappedMemoryRanges(dev, 1, &mmr)) {
-      LOG.error("unable to update mapped memory");
-      return false;
-    }
+void BufferView::drop() noexcept {
+  if (buf_view) {
+    vkDestroyBufferView(buf_slice.buf_alloc->ctxt->dev, buf_view, nullptr);
+    buf_view = VK_NULL_HANDLE;
   }
+}
+BufferView::~BufferView() noexcept { drop(); }
 
-  void* src;
-  if (L_VK <- vkMapMemory(dev, dev_mem, src_offset, size, 0, &src)) {
-    LOG.error("unable to map memory for fetching");
-    return false;
-  }
-  std::memcpy(dst, src, size);
-
-  vkUnmapMemory(dev, dev_mem);
-  return true;
+BufferView::operator const BufferSlice&() const noexcept {
+  return buf_slice;
 }
 
-//
-// StorageBufferView -----------------------------------------------------------
-//L
-
-StorageBufferView::StorageBufferView(std::shared_ptr<StorageBuffer> buf,
-  StorageMeasure offset, StorageMeasure size) :
-  _buf(buf),
-  _offset(offset),
-  _size(size) {
-}
-VkBuffer StorageBufferView::buf() const {
-  return _buf->buf();
-}
-size_t StorageBufferView::offset() const {
-  return _offset;
-}
-size_t StorageBufferView::size() const {
-  return _size;
+DeviceMemorySlice BufferView::dev_mem_view() const noexcept {
+  return buf_slice.dev_mem_view();
 }
 
-VkBufferMemoryBarrier StorageBufferView::barrier(
-  VkAccessFlags src, VkAccessFlags dst) const {
-  VkBufferMemoryBarrier bmb {};
-  bmb.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-  bmb.buffer = buf();
-  bmb.offset = _offset;
-  bmb.size = _size;
-  bmb.srcAccessMask = src;
-  bmb.dstAccessMask = dst;
-  return bmb;
-}
-
-//
-// StorageBuffer ---------------------------------------------------------------
-//L
-
-StorageBufferView StorageBuffer::view() {
-  return { shared_from_this(), 0, _size };
-}
-StorageBufferView StorageBuffer::view(
-  StorageMeasure offset, StorageMeasure size) {
-  return { shared_from_this(), offset, size };
-}
-
-StorageBuffer::StorageBuffer(StorageMeasure size, VkBufferUsageFlags usage) :
-  _storage(nullptr),
-  _size(size),
-  _buf(VK_NULL_HANDLE),
-  _usage(usage) {
-}
-Storage& StorageBuffer::storage() {
-  return *_storage;
-}
-const Storage& StorageBuffer::storage() const {
-  return *_storage;
-}
-
-bool StorageBuffer::context_changing() {
-  if (_buf) {
-    vkDestroyBuffer(ctxt().dev(), _buf, nullptr);
-    _buf = VK_NULL_HANDLE;
-  }
-  return true;
-}
-bool StorageBuffer::context_changed() {
-  VkBufferCreateInfo bci {};
-  bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  bci.size = _size;
-  bci.usage = _usage;
-  // We need to collect all the bacteria transform results before evaluation.
-  bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  if (L_VK <- vkCreateBuffer(ctxt().dev(), &bci, nullptr, &_buf)) {
-    LOG.error("unable to create buffer");
-    return false;
-  }
-
-  VkMemoryRequirements mr;
-  vkGetBufferMemoryRequirements(ctxt().dev(), _buf, &mr);
-  if (_storage == nullptr) {
-    LOG.error("buffer must bind with a storage to be used");
-    return false;
-  }
-  if (!_storage->declare_dependency(_buf, mr.memoryTypeBits, mr.size)) {
-    LOG.error("unable to declare dependency");
-    return false;
-  }
-
-  return true;
-}
-
-size_t StorageBuffer::size() const {
-  return _size;
-}
-VkBuffer StorageBuffer::buf() const {
-  return _buf;
-}
-
-void StorageBuffer::bind(Storage& storage) {
-  _storage = storage.shared_from_this();
-}
-
-//
-// StorageImageView ------------------------------------------------------------
-//L
-
-StorageImageView::StorageImageView(std::shared_ptr<StorageImage> img,
-  const VkOffset2D& offset, const VkExtent2D& extent) :
-  _img(img),
-  _img_view(VK_NULL_HANDLE),
-  _offset(offset),
-  _extent(extent) {}
-
-bool StorageImageView::context_changing() {
-  if (_img_view) {
-    vkDestroyImageView(ctxt().dev(), _img_view, nullptr);
-    _img_view = VK_NULL_HANDLE;
-  }
-  return true;
-}
-bool StorageImageView::context_changed() {
+ImageView::ImageView(const ImageSlice& img_slice) noexcept :
+  img_slice(img_slice),
+  img_view(VK_NULL_HANDLE) {}
+bool ImageView::make() noexcept {
   VkImageViewCreateInfo ivci {};
   ivci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  ivci.image = _img->img();
-  // TODO: (penguinliong) Make it adjustable later.
-  ivci.viewType = _img->nlayer() ?
-    VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
-  ivci.format = _img->format();
-  ivci.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+  ivci.image = img_slice.img_alloc->img;
+  ivci.components = { VK_COMPONENT_SWIZZLE_IDENTITY };
+  ivci.format = img_slice.img_alloc->req.format;
   ivci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  ivci.subresourceRange.baseArrayLayer = img_slice.base_layer;
+  ivci.subresourceRange.layerCount = img_slice.nlayer.value_or(1);
+  ivci.subresourceRange.baseMipLevel = 0;
   ivci.subresourceRange.levelCount = 1;
-  ivci.subresourceRange.layerCount = _img->nlayer().value_or(1);
+  ivci.viewType = img_slice.nlayer.has_value() ?
+    VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
 
-  if (L_VK <- vkCreateImageView(ctxt().dev(), &ivci, nullptr, &_img_view)) {
+  if (L_VK <- vkCreateImageView(
+    img_slice.img_alloc->ctxt->dev, &ivci, nullptr, &img_view)) {
     LOG.error("unable to create image view");
     return false;
   }
   return true;
 }
-
-VkImage StorageImageView::img() const {
-  return _img->img();
-}
-VkImageView StorageImageView::img_view() const {
-  return _img_view;
-}
-const VkOffset2D& StorageImageView::offset() const {
-  return _offset;
-}
-const VkExtent2D& StorageImageView::extent() const {
-  return _extent;
-}
-std::optional<uint32_t> StorageImageView::nlayer() const {
-  return _img->nlayer();
-}
-VkImageMemoryBarrier StorageImageView::barrier(
-  VkAccessFlags src, VkAccessFlags dst,
-  VkImageLayout srcLayout, VkImageLayout dstLayout) const {
-  VkImageMemoryBarrier imb {};
-  imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  imb.image = img();
-  imb.oldLayout = srcLayout;
-  imb.newLayout = dstLayout;
-  imb.srcAccessMask = src;
-  imb.dstAccessMask = dst;
-  imb.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  imb.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-  imb.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-  return imb;
-}
-
-VkBufferImageCopy StorageImageView::copy_with_buffer(
-  const StorageBufferView& buf) const {
-  auto layer = nlayer().value_or(1);
-  VkBufferImageCopy bic {};
-  bic.bufferOffset = buf.offset();
-  bic.bufferRowLength = _extent.width;
-  bic.bufferImageHeight = _extent.height;
-  bic.imageExtent = { _extent.width, _extent.height, 1 };
-  bic.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  bic.imageSubresource.layerCount = layer;
-  return bic;
-}
-
-//
-// StorageImage ----------------------------------------------------------------
-//L
-
-StorageImage::StorageImage(
-  const VkExtent2D& extent, std::optional<uint32_t> nlayer,
-  VkFormat format, VkImageUsageFlags usage, VkImageTiling tiling) :
-  _img(VK_NULL_HANDLE),
-  _storage(nullptr),
-  _extent(extent),
-  _nlayer(nlayer),
-  _format(format),
-  _usage(usage),
-  _tiling(tiling) {
-}
-
-bool StorageImage::context_changing() {
-  if (_img) {
-    vkDestroyImage(ctxt().dev(), _img, nullptr);
-    _img = VK_NULL_HANDLE;
+void ImageView::drop() noexcept {
+  if (img_view) {
+    vkDestroyImageView(img_slice.img_alloc->ctxt->dev, img_view, nullptr);
+    img_view = VK_NULL_HANDLE;
   }
-  return true;
 }
-bool StorageImage::context_changed() {
-  VkImageCreateInfo ici {};
-  ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  ici.imageType = VK_IMAGE_TYPE_2D;
-  ici.format = _format;
-  ici.extent.width = _extent.width;
-  ici.extent.height = _extent.height;
-  ici.extent.depth = 1;
-  ici.mipLevels = 1;
-  ici.arrayLayers = _nlayer.value_or(1);
-  ici.samples = VK_SAMPLE_COUNT_1_BIT;
-  ici.tiling = _tiling;
-  ici.usage = _usage;
-  ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+ImageView::~ImageView() noexcept { drop(); }
 
-  if (L_VK <- vkCreateImage(ctxt().dev(), &ici, nullptr, &_img)) {
-    LOG.error("unable to create image");
-    return false;
-  }
-  
-  VkMemoryRequirements mr {};
-  vkGetImageMemoryRequirements(ctxt().dev(), _img, &mr);
-  if (_storage == nullptr) {
-    LOG.error("image must bind with a storage to be used");
-    return false;
-  }
-  if (!_storage->declare_dependency(_img, mr.memoryTypeBits, mr.size)) {
-    LOG.error("unable to declare dependency");
-    return false;
-  }
-
-  return true;
+ImageView::operator const ImageSlice&() const noexcept {
+  return img_slice;
 }
 
-Storage& StorageImage::storage() {
-  return *_storage;
-}
-const Storage& StorageImage::storage() const {
-  return *_storage;
-}
-const VkExtent2D& StorageImage::extent() const{
-  return _extent;
-}
-VkImage StorageImage::img() const {
-  return _img;
-}
-std::optional<uint32_t> StorageImage::nlayer() const {
-  return _nlayer;
-}
-size_t StorageImage::size() const {
-  // TODO: (penguinliong) Adapt to other color formats.
-  return _extent.width * _extent.height * _nlayer.value_or(1) * sizeof(float);
-}
-VkFormat StorageImage::format() const {
-  return _format;
+DeviceMemorySlice ImageView::dev_mem_view() const noexcept {
+  return img_slice.dev_mem_view();
 }
 
-void StorageImage::bind(Storage& storage) {
-  _storage = storage.shared_from_this();
-}
-std::shared_ptr<StorageImageView> StorageImage::view() {
-  return ctxt().make_contextual<StorageImageView>(
-    shared_from_this(), VkOffset2D{ 0, 0 }, _extent);
-}
-std::shared_ptr<StorageImageView> StorageImage::view(const VkOffset2D& offset,
-  const VkExtent2D& extent) {
-  return ctxt().make_contextual<StorageImageView>(
-    shared_from_this(), offset, extent);
-}
-
-// StagingStorageImage ---------------------------------------------------------
-
-StagingStorageImage::StagingStorageImage(
-  const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
-  StorageImage(extent, nlayer, format,
-    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_IMAGE_TILING_LINEAR) {}
-
-StorageImageView StagingStorageImage::view(
-  const VkOffset2D& offset, const VkExtent2D& extent) {
-  LOG.error("cannot create view for storage image");
-  std::terminate();
-}
-
-// ColorAttachmentStorageImage -------------------------------------------------
-
-ColorAttachmentStorageImage::ColorAttachmentStorageImage(
-  const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
-  StorageImage(extent, nlayer, format,
-    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-    VK_IMAGE_TILING_OPTIMAL) {}
-
-// UniformStorageImage ---------------------------------------------------------
-
-UniformStorageImage::UniformStorageImage(
-  const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format) :
-  StorageImage(extent, nlayer, format,
-    VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-    VK_IMAGE_TILING_OPTIMAL) {}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-VkBuffer create_buf(VkDevice dev, const BufferAllocationRequirements& req) {
+VkBuffer create_buf(
+  VkDevice dev, const BufferAllocationRequirements& req) noexcept {
   VkBufferCreateInfo bci {};
   bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   bci.size = req.size;
   bci.usage = req.usage;
 
   VkBuffer buf;
-  return (L_VK <- vkCreateBuffer(dev, &bci, nullptr, &buf)) ?
-    VK_NULL_HANDLE : buf;
+  if (L_VK <- vkCreateBuffer(dev, &bci, nullptr, &buf)) {
+    LOG.error("unable to create image");
+    return VK_NULL_HANDLE;
+  }
+  return buf;
 }
-VkImage create_img(VkDevice dev, const ImageAllocationRequirements& req) {
+VkImage create_img(
+  VkDevice dev, const ImageAllocationRequirements& req) noexcept {
   VkImageCreateInfo ici {};
   ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   ici.format = req.format;
@@ -653,131 +245,97 @@ VkImage create_img(VkDevice dev, const ImageAllocationRequirements& req) {
   ici.samples = VK_SAMPLE_COUNT_1_BIT;
   ici.imageType = VK_IMAGE_TYPE_2D;
   ici.tiling = req.tiling;
+  ici.usage = req.usage;
+  ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
   VkImage img;
   if (L_VK <- vkCreateImage(dev, &ici, nullptr, &img)) {
-    return false;
+    LOG.error("unable to create image");
+    return VK_NULL_HANDLE;
   }
+  return img;
 }
 
-constexpr VkDeviceSize align_size(VkDeviceSize size, VkDeviceSize alignment) {
-  return (size + alignment - 1) / alignment * alignment;
+
+
+BufferSlice BufferAllocation::slice(
+  VkDeviceSize offset, VkDeviceSize size) const noexcept {
+  return { this, offset, size };
+}
+BufferView BufferAllocation::view(
+  VkDeviceSize offset, VkDeviceSize size, VkFormat format) const noexcept {
+  return { slice(offset, size), format };
 }
 
-bool HeapManager::create_rscs() {
-  auto dev = ctxt().dev();
-
-  // Create buffers.
-  for (auto& buf_alloc : _buf_allocs) {
-    auto buf = create_buf(dev, buf_alloc.req);
-    if (buf == VK_NULL_HANDLE) {
-      return false;
-    }
-    buf_alloc.alloc->buf = buf;
-
-    // Check memory requirements.
-    VkMemoryRequirements mem_req;
-    vkGetBufferMemoryRequirements(dev, buf, &mem_req);
-    
-    auto mem_type_idx = ctxt().find_mem_type(mem_req.memoryTypeBits,
-      get_fallbacks(buf_alloc.req.opt));
-    buf_alloc.alloc->mem_type_idx = mem_type_idx;
-
-    auto mem_heap_idx = ctxt().get_mem_heap_idx(mem_type_idx);
-    auto& alloc_size = _heap_allocs[mem_heap_idx].alloc_size;
-    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
-    buf_alloc.alloc->offset = offset_aligned;
-    alloc_size = offset_aligned + mem_req.size;
-  }
-
-  // Create images.
-  for (auto& img_alloc : _img_allocs) {
-    auto img = create_img(dev, img_alloc.req);
-    if (img == VK_NULL_HANDLE) {
-      return false;
-    }
-    img_alloc.alloc->img = img;
-
-    // Check memory requirements.
-    VkMemoryRequirements mem_req;
-    vkGetImageMemoryRequirements(dev, img, &mem_req);
-
-    auto mem_type_idx = ctxt().find_mem_type(mem_req.memoryTypeBits,
-      get_fallbacks(img_alloc.req.opt));
-    img_alloc.alloc->mem_type_idx = mem_type_idx;
-
-    auto mem_heap_idx = ctxt().get_mem_heap_idx(mem_type_idx);
-    auto& alloc_size = _heap_allocs[mem_heap_idx].alloc_size;
-    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
-    img_alloc.alloc->offset = offset_aligned;
-    alloc_size = offset_aligned + mem_req.size;
-  }
-  return true;
+ImageSlice ImageAllocation::slice(
+  uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept {
+  return { this, base_layer, nlayer };
+}
+ImageView ImageAllocation::view(
+  uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept {
+  return { slice(base_layer, nlayer) };
 }
 
-bool HeapManager::alloc_mem() {
-  auto dev = ctxt().dev();
 
-  // Allocate memory for each type.
-  for (auto i = 0; i < VK_MAX_MEMORY_TYPES; ++i) {
-    auto& heap_alloc = _heap_allocs[i];
-    if (heap_alloc.alloc_size > 0) {
-      VkMemoryAllocateInfo mai {};
-      mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      mai.allocationSize = heap_alloc.alloc_size;
-      mai.memoryTypeIndex = i;
 
-      VkDeviceMemory dev_mem;
-      if (L_VK <- vkAllocateMemory(dev, &mai, nullptr, &dev_mem)) {
-        return false;
-      }
-      heap_alloc.dev_mem = dev_mem;
-    }
+HeapManager::HeapManager(const Context& ctxt) noexcept :
+  ctxt(&ctxt),
+  mem_types(), 
+  mem_heaps(),
+  heap_allocs(),
+  buf_allocs(),
+  img_allocs() {}
+std::string translate_mem_props(VkMemoryPropertyFlags props) noexcept {
+  std::string out;
+  if (props & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "DeviceOnly";
   }
-  return true;
+  if (props & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "HostVisible";
+  }
+  if (props & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "HostCoherent";
+  }
+  if (props & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "HostCached";
+  }
+  if (props & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "LazyAllocated";
+  }
+  if (props & VK_MEMORY_PROPERTY_PROTECTED_BIT) {
+    if (!out.empty()) out += " + ";
+    out += "Protected";
+  }
+  if (out.empty()) {
+    out = "(no property)";
+  }
+  return out;
 }
+bool HeapManager::make() noexcept {
+  LOG.trace("making managed memory dependent resources");
+  // Ger memory properties.
+  VkPhysicalDeviceMemoryProperties pdmp;
+  vkGetPhysicalDeviceMemoryProperties(ctxt->req.phys_dev_info->phys_dev, &pdmp);
+  mem_types.resize(pdmp.memoryTypeCount);
+  std::memcpy(mem_types.data(), pdmp.memoryTypes,
+    pdmp.memoryTypeCount * sizeof(VkMemoryType));
+  mem_heaps.resize(pdmp.memoryHeapCount);
+  std::memcpy(mem_heaps.data(), pdmp.memoryHeaps,
+    pdmp.memoryHeapCount * sizeof (VkMemoryHeap));
 
-bool HeapManager::bind_rscs() {
-  auto dev = ctxt().dev();
+  uint32_t i = 0;
+  for (auto& mem_type : mem_types) {
+    LOG.info("discovered memory type #{}: {}", i++,
+      translate_mem_props(mem_type.propertyFlags));
+  }
 
-  for (auto& buf_alloc : _buf_allocs) {
-    auto alloc = *buf_alloc.alloc;
-    auto dev_mem = _heap_allocs[alloc.mem_type_idx].dev_mem;
-    if (L_VK <- vkBindBufferMemory(dev, alloc.buf, dev_mem, alloc.offset)) {
-      return false;
-    }
-  }
-  for (auto& img_alloc : _img_allocs) {
-    auto alloc = *img_alloc.alloc;
-    auto dev_mem = _heap_allocs[alloc.mem_type_idx].dev_mem;
-    if (L_VK <- vkBindImageMemory(dev, alloc.img, dev_mem, alloc.offset)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool HeapManager::context_changing() {
-  auto dev = ctxt().dev();
-  for (auto& buf_alloc : _buf_allocs) {
-    vkDestroyBuffer(dev, buf_alloc.alloc->buf, nullptr);
-    buf_alloc = {};
-  }
-  for (auto& img_alloc : _img_allocs) {
-    vkDestroyImage(dev, img_alloc.alloc->img, nullptr);
-    img_alloc = {};
-  }
-  for (auto& heap_alloc : _heap_allocs) {
-    vkFreeMemory(dev, heap_alloc.dev_mem, nullptr);
-    heap_alloc = {};
-  }
-  return true;
-}
-bool HeapManager::context_changed() {
-  auto dev = ctxt().dev();
-  std::vector<BufAlloc*> delayed_allocs;
-
-  if (!create_rscs()) {
+  if (!make_rscs()) {
     LOG.error("unable to create resources");
     return false;
   }
@@ -791,32 +349,209 @@ bool HeapManager::context_changed() {
   }
   return true;
 }
-
-BufferAllocation HeapManager::declare_buf(size_t size, VkBufferUsageFlags usage,
-  StorageOptimization opt) {
-  auto alloc = std::make_shared<BufferAllocationInfo>();
-  BufAlloc buf_alloc {};
-  buf_alloc.alloc = alloc;
-  buf_alloc.req.size = size;
-  buf_alloc.req.usage = usage;
-  buf_alloc.req.opt = opt;
-  _buf_allocs.emplace_back(std::move(buf_alloc));
-  return alloc;
+void HeapManager::drop() noexcept {
+  LOG.trace("dropping managed memory dependent resources");
+  for (auto& buf_alloc : buf_allocs) {
+    vkDestroyBuffer(ctxt->dev, buf_alloc.buf, nullptr);
+    buf_alloc.buf = VK_NULL_HANDLE;
+  }
+  for (auto& img_alloc : img_allocs) {
+    vkDestroyImage(ctxt->dev, img_alloc.img, nullptr);
+    img_alloc.img = VK_NULL_HANDLE;
+  }
+  for (auto& heap_alloc : heap_allocs) {
+    vkFreeMemory(ctxt->dev, heap_alloc.second.dev_mem, nullptr);
+    heap_alloc.second.dev_mem = VK_NULL_HANDLE;
+  }
 }
-ImageAllocation HeapManager::declare_img(const VkExtent2D& extent,
-    std::optional<uint32_t> nlayer, VkFormat format, VkImageUsageFlags usage,
-    VkImageTiling tiling, StorageOptimization opt) {
-  auto alloc = std::make_shared<ImageAllocationInfo>();
-  ImgAlloc img_alloc {};
-  img_alloc.alloc = alloc;
-  img_alloc.req.extent = extent;
-  img_alloc.req.nlayer = std::move(nlayer);
-  img_alloc.req.format = format;
-  img_alloc.req.usage = usage;
-  img_alloc.req.tiling = tiling;
-  img_alloc.req.opt = opt;
-  _img_allocs.emplace_back(std::move(img_alloc));
-  return alloc;
+HeapManager::~HeapManager() noexcept { drop(); }
+
+
+
+uint32_t HeapManager::find_mem_type(uint32_t hint,
+  VkMemoryPropertyFlags flags) const noexcept {
+  auto n = static_cast<uint32_t>(mem_types.size());
+  for (uint32_t i = 0; i < n; ++i) {
+    if (hint & 1) {
+      const auto& cur = mem_types[i];
+      if (cur.propertyFlags == flags) {
+        return i;
+      }
+    }
+    hint >>= 1;
+  }
+  return VK_MAX_MEMORY_TYPES;
+}
+std::pair<uint32_t, VkMemoryPropertyFlags> HeapManager::find_mem_type(
+  uint32_t hint, Span<VkMemoryPropertyFlags> fallbacks) const noexcept {
+  for (const auto& mem_props : fallbacks) {
+    auto mem_type_idx = find_mem_type(hint, mem_props);
+    if (mem_type_idx < VK_MAX_MEMORY_TYPES) {
+      return std::make_pair(mem_type_idx, mem_props);
+    }
+  }
+  return std::make_pair(VK_MAX_MEMORY_TYPES, 0);
+}
+uint32_t HeapManager::get_mem_heap_idx(uint32_t mem_type_idx) const noexcept {
+  return mem_types[mem_type_idx].heapIndex;
+}
+
+
+
+bool HeapManager::make_rscs() noexcept {
+  return make_bufs() && make_imgs();
+}
+bool HeapManager::make_bufs() noexcept  {
+  uint32_t i = 0;
+  // Create buffers.
+  for (auto& buf_alloc : buf_allocs) {
+    auto buf = create_buf(ctxt->dev, buf_alloc.req);
+    if (buf == VK_NULL_HANDLE) {
+      return false;
+    }
+    buf_alloc.buf = buf;
+
+    // Check memory requirements.
+    VkMemoryRequirements mem_req;
+    vkGetBufferMemoryRequirements(ctxt->dev, buf, &mem_req);
+
+    auto fallback = get_mem_prop_fallback(buf_alloc.req.visibility);
+    auto pair = find_mem_type(mem_req.memoryTypeBits, fallback);
+    auto mem_type_idx = pair.first;
+    if (mem_type_idx == VK_MAX_MEMORY_TYPES) {
+      LOG.error("unable to find memory type for buffer #{}", i);
+      return false;
+    } else {
+      LOG.info("matched memory type #{} ({}) for buffer #{}", mem_type_idx,
+        translate_mem_props(pair.second), i);
+    }
+    auto mem_heap_idx = get_mem_heap_idx(mem_type_idx);
+
+    auto alloc = heap_allocs.find(mem_type_idx);
+    if (alloc == heap_allocs.end()) {
+      alloc = heap_allocs.emplace_hint(alloc,
+        mem_type_idx, HeapAllocation { ctxt });
+    }
+
+    auto& alloc_size = alloc->second.alloc_size;
+    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    buf_alloc.offset = offset_aligned;
+    buf_alloc.heap_alloc = &alloc->second;
+    alloc_size = offset_aligned + mem_req.size;
+    ++i;
+  }
+  return true;
+}
+bool HeapManager::make_imgs() noexcept {
+  uint32_t i = 0;
+  // Create images.
+  for (auto& img_alloc : img_allocs) {
+    auto img = create_img(ctxt->dev, img_alloc.req);
+    if (img == VK_NULL_HANDLE) {
+      return false;
+    }
+    img_alloc.img = img;
+
+    // Check memory requirements.
+    VkMemoryRequirements mem_req;
+    vkGetImageMemoryRequirements(ctxt->dev, img, &mem_req);
+
+    auto fallback = get_mem_prop_fallback(img_alloc.req.visibility);
+    auto pair = find_mem_type(mem_req.memoryTypeBits, fallback);
+    auto mem_type_idx = pair.first;
+    if (mem_type_idx == VK_MAX_MEMORY_TYPES) {
+      LOG.error("unable to find memory type for image #{} (0 based)", i);
+      return false;
+    } else {
+      LOG.info("matched memory type #{} ({}) for image #{}", mem_type_idx,
+        translate_mem_props(pair.second), i);
+    }
+    auto mem_heap_idx = get_mem_heap_idx(mem_type_idx);
+
+    auto alloc = heap_allocs.find(mem_type_idx);
+    if (alloc == heap_allocs.end()) {
+      alloc = heap_allocs.emplace_hint(alloc,
+        mem_type_idx, HeapAllocation { ctxt });
+    }
+
+    auto& alloc_size = alloc->second.alloc_size;
+    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    img_alloc.offset = offset_aligned;
+    img_alloc.heap_alloc = &alloc->second;
+    alloc_size = offset_aligned + mem_req.size;
+    ++i;
+  }
+  return true;
+}
+bool HeapManager::alloc_mem() noexcept {
+  // Allocate memory for each type.
+  for (auto& pair : heap_allocs) {
+    auto& heap_alloc = pair.second;
+    if (heap_alloc.alloc_size > 0) {
+      VkMemoryAllocateInfo mai {};
+      mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+      mai.allocationSize = heap_alloc.alloc_size;
+      mai.memoryTypeIndex = pair.first;
+
+      VkDeviceMemory dev_mem;
+      if (L_VK <- vkAllocateMemory(ctxt->dev, &mai, nullptr, &dev_mem)) {
+        LOG.error("unable to allocate memory for resources requiring memory "
+          "type {}", pair.first);
+        return false;
+      }
+      LOG.info("allocated memory for resources requiring memory type {}",
+        pair.first);
+      heap_alloc.dev_mem = dev_mem;
+    }
+  }
+  return true;
+}
+bool HeapManager::bind_rscs() noexcept {
+  return bind_bufs() && bind_imgs();
+}
+bool HeapManager::bind_bufs() noexcept {
+  uint32_t i = 0;
+  for (auto& buf_alloc : buf_allocs) {
+    if (L_VK <- vkBindBufferMemory(
+      ctxt->dev, buf_alloc.buf,
+      buf_alloc.heap_alloc->dev_mem, buf_alloc.offset)) {
+      LOG.error("unable to bind buffer #{} to its memory allocation", i);
+      return false;
+    }
+    LOG.info("bound image #{} to its memory allocation", i);
+  }
+  return true;
+}
+bool HeapManager::bind_imgs() noexcept {
+  uint32_t i = 0;
+  for (auto& img_alloc : img_allocs) {
+    if (L_VK <- vkBindImageMemory(
+      ctxt->dev, img_alloc.img,
+      img_alloc.heap_alloc->dev_mem, img_alloc.offset)) {
+      LOG.error("unable to bind image #{} to its memory allocation", i);
+      return false;
+    }
+    LOG.info("bound image #{} to its memory allocation", i);
+  }
+  return true;
+}
+
+const BufferAllocation& HeapManager::declare_buf(
+  size_t size, VkBufferUsageFlags usage,
+  MemoryVisibility visibility) noexcept {
+  return buf_allocs.emplace_back(BufferAllocation {
+    ctxt, { size, usage, visibility },
+    VK_NULL_HANDLE, nullptr, 0,
+  });
+}
+const ImageAllocation& HeapManager::declare_img(
+  const VkExtent2D& extent, std::optional<uint32_t> nlayer, VkFormat format,
+  VkImageUsageFlags usage, VkImageTiling tiling,
+  MemoryVisibility visibility) noexcept {
+  return img_allocs.emplace_back(ImageAllocation {
+    ctxt, { extent, std::move(nlayer), format, usage, tiling, visibility },
+    VK_NULL_HANDLE, nullptr, 0,
+  });
 }
 
 L_CUVK_END_

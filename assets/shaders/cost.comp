@@ -49,9 +49,18 @@ buffer costs_buf {
 };
 //L
 
-float sum_vec(vec4 v) {
-  return v.x + v.y + v.z + v.w;
-}
+
+//
+// Push Constants
+// --------------
+layout(std430, push_constant) uniform DeformMeta {
+  // Half extent of input universes, i.e. vec2(univ.width / 2, univ.height / 2).
+  uvec2 HALF_UNIV_EXTENT;
+  // The size in floats of a single input universe (layer).
+  uint HALF_UNIV_SIZE;
+};
+
+
 
 float block_diff(ivec2 pos, int univ) {
   int x = pos.x;
@@ -66,41 +75,42 @@ float block_diff(ivec2 pos, int univ) {
     imageLoad(sim_univs, ivec3(x + 1, y    , univ)).x,
     imageLoad(sim_univs, ivec3(x    , y + 1, univ)).x,
     imageLoad(sim_univs, ivec3(x + 1, y + 1, univ)).x);
-  return sum_vec(abs(real_val - sim_val));
+  vec4 diff = abs(real_val - sim_val);
+  diff.xy += diff.zw;
+  return diff.x + diff.y;
 }
 
 void main() {
-  ivec2 ext = imageSize(real_univ);
+  int x = int(gl_GlobalInvocationID.x);
+  int y = int(gl_GlobalInvocationID.y);
   int univ = int(gl_GlobalInvocationID.z);
-  int univ_size = ext.x * ext.y;
-  int pos_offset = int(
-    gl_GlobalInvocationID.y * ext.x + gl_GlobalInvocationID.x);
+
+  int univ_offset = int(univ * HALF_UNIV_SIZE);
+  int pos_offset = int(y * HALF_UNIV_EXTENT.x) + x;
+  int offset = univ_offset + pos_offset;
 
   // Sum up first step for all universes.
-  {
-    int offset = univ * univ_size + pos_offset;
-    sum_temp[offset] = block_diff(ivec2(gl_GlobalInvocationID.xy * 2), univ);
-    barrier();
-  }
+  sum_temp[offset] = block_diff(ivec2(x * 2, y * 2), univ);
+  barrier();
 
   // Now `sum_temp` is filled with values. Its size for each universe is
-  // `ext.x * ext.y / 4`.
-  int s = univ_size / 4;
+  // `HALF_UNIS_SIZE`.
+  int s = int(HALF_UNIV_SIZE);
   while (s > 1) {
     int half_s = s / 2;
     if (pos_offset < half_s) {
-      int offset = univ * univ_size + pos_offset;
       sum_temp[offset] += sum_temp[offset + half_s];
       s = half_s;
     } else if (pos_offset == half_s && (s & 1) == 1) {
       // When the size is an odd number, the extra one should be preserved.
-      int offset = univ * univ_size + pos_offset;
       sum_temp[offset] = sum_temp[offset + half_s];
       s = half_s + 1;
+    } else {
+      // Thread is finished.
+      return;
     }
     barrier();
   }
 
-  int offset = univ * univ_size;
-  costs[univ] = sum_temp[offset];
+  costs[univ] = sum_temp[univ_offset];
 }

@@ -29,7 +29,7 @@ struct Bacterium {
   // Orientation of the cell, CCW from x-axis.
   float orient;
   // ID of universe the bacterium is in.
-  int univ;
+  uint univ;
 };
 //L
 
@@ -59,6 +59,17 @@ out; // out vec2 gl_Position;
 
 
 
+//
+// Push Constants
+// --------------
+layout(std430, push_constant) uniform EvalMeta {
+  // The index of the first universe.
+  uint BASE_UNIV;
+};
+//L
+
+
+
 vec4 calc_pos(mat2 rotate, vec2 orig, vec2 offset) {
   return vec4(rotate * orig + offset, 0.0, 1.0);
 }
@@ -73,7 +84,7 @@ void main() {
   float sin_o = sin(bac.orient);
   float cos_o = cos(bac.orient);
   mat2x2 rotate = { { cos_o, -sin_o }, { sin_o, cos_o } };
-
+  
   // Right of the round tip.
   gl_Position = calc_pos(rotate, vec2(len + r, 0.0), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
@@ -115,6 +126,6 @@ void main() {
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
 
-  gl_Layer = bac.univ;
+  gl_Layer = int(bac.univ - BASE_UNIV);
   EndPrimitive();
 }

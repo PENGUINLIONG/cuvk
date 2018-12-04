@@ -24,7 +24,7 @@ namespace detail {
           auto milli = micro / 1000;
           micro %= 1000;
 
-          std::fprintf(stdout, "% 8d.%03dms [%s] %s\n",
+          std::fprintf(stderr, "% 8d.%03dms [%s] %s\n",
             (int)milli, (int)micro, msg.level, msg.msg.c_str());
           logger._msgs.pop();
         }
