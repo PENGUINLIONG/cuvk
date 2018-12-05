@@ -481,6 +481,37 @@ CuvkResult L_STDCALL cuvkCreateContext(
   L_INOUT CuvkMemoryRequirements memoryRequirements,
   L_OUT CuvkContext* pContext) {
   auto& phys_dev_info = vk.phys_dev_infos[physicalDeviceIndex];
+  auto& limits = phys_dev_info.phys_dev_props.limits;
+  if (limits.maxImageArrayLayers < memoryRequirements.nuniv) {
+    LOG.info("number of universes rendered in one eval task exceeds the limit "
+      "of device (nuniv={}; limit={})",
+      memoryRequirements.nuniv, limits.maxImageArrayLayers);
+    memoryRequirements.nuniv = limits.maxImageArrayLayers;
+  }
+  if (limits.maxComputeWorkGroupCount[0] < memoryRequirements.nspec) {
+    LOG.info("number of deform specs used in deform task exceeds the limit of "
+      "device (nspec={}; limit={})",
+      memoryRequirements.nspec, limits.maxComputeWorkGroupCount[0]);
+    memoryRequirements.nspec = limits.maxComputeWorkGroupCount[0];
+  }
+  if (limits.maxComputeWorkGroupCount[1] < memoryRequirements.nbac) {
+    LOG.info("number of bacteria used in deform task exceeds the limit of "
+      "device (nbac={}; limit={})",
+      memoryRequirements.nbac, limits.maxComputeWorkGroupCount[1]);
+    memoryRequirements.nbac = limits.maxComputeWorkGroupCount[1];
+  }
+  if (limits.maxComputeWorkGroupCount[0] < memoryRequirements.width) {
+    LOG.error("width of universe exceeds the limit of device (width={}, "
+      "limit={})",
+      memoryRequirements.height, limits.maxComputeWorkGroupCount[0]);
+    return false;
+  }
+  if (limits.maxComputeWorkGroupCount[1] < memoryRequirements.height) {
+    LOG.error("height of universe exceeds the limit of device (height={}, "
+      "limit={})",
+      memoryRequirements.height, limits.maxComputeWorkGroupCount[1]);
+    return false;
+  }
   auto rv = new Cuvk(
     phys_dev_info, memoryRequirements,
     MemoryAllocationGuidelines(phys_dev_info, memoryRequirements));
