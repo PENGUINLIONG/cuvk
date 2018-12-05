@@ -446,7 +446,14 @@ std::string gen_phys_dev_json() {
   return std::move(rv);
 }
 
-CuvkResult L_EXPORT cuvkInitialize(CuvkBool debug) {
+
+CuvkResult L_STDCALL cuvkRedirectLog(const char* path) {
+  // TODO: (penguinliong) Implement this.
+  LOG.error("not implemented yet");
+  return false;
+}
+
+CuvkResult L_STDCALL cuvkInitialize(CuvkBool debug) {
   if (debug) {
     if (!vk.make_debug()) {
       return false;
@@ -460,7 +467,7 @@ CuvkResult L_EXPORT cuvkInitialize(CuvkBool debug) {
   return true;
 }
 
-void L_EXPORT cuvkEnumeratePhysicalDevices(L_OUT char* pJson,
+void L_STDCALL cuvkEnumeratePhysicalDevices(L_OUT char* pJson,
   L_INOUT CuvkSize* jsonSize) {
   if (*jsonSize) {
     *jsonSize = static_cast<CuvkSize>(phys_dev_json.size());
@@ -469,7 +476,7 @@ void L_EXPORT cuvkEnumeratePhysicalDevices(L_OUT char* pJson,
   }
 }
 
-CuvkResult L_EXPORT cuvkCreateContext(
+CuvkResult L_STDCALL cuvkCreateContext(
   CuvkSize physicalDeviceIndex,
   L_INOUT CuvkMemoryRequirements memoryRequirements,
   L_OUT CuvkContext* pContext) {
@@ -486,7 +493,7 @@ CuvkResult L_EXPORT cuvkCreateContext(
   }
 }
 
-void L_EXPORT cuvkDestroyContext(
+void L_STDCALL cuvkDestroyContext(
   CuvkContext context) {
   delete reinterpret_cast<Cuvk*>(context);
 }
@@ -524,7 +531,7 @@ bool fill_deform(Task& task,
 
   return rec.end();
 }
-CuvkResult L_EXPORT cuvkInvokeDeformation(
+CuvkResult L_STDCALL cuvkInvokeDeformation(
   CuvkContext context,
   const DeformationInvocation* pInvocation,
   L_OUT CuvkTask* pTask) {
@@ -711,7 +718,7 @@ bool fill_eval_workset(Task& task,
     // -------------------------------------------------------------------------
     // Dispatch cost computation.
     .push_const(*task.ctxt.cost_pipe,
-      0, meta.size() * sizeof(uint32_t), meta.data())
+      0, static_cast<uint32_t>(meta.size() * sizeof(uint32_t)), meta.data())
     .dispatch(*task.ctxt.cost_pipe, &task.desc_set, half_w, half_h, nuniv)
     // -------------------------------------------------------------------------
     // Wait the costs to be computed and to be visible to host.
@@ -721,7 +728,7 @@ bool fill_eval_workset(Task& task,
     .to_stage(VK_PIPELINE_STAGE_HOST_BIT);
   return rec.end();
 }
-CuvkResult L_EXPORT cuvkInvokeEvaluation(
+CuvkResult L_STDCALL cuvkInvokeEvaluation(
   CuvkContext context,
   const EvaluationInvocation* pInvocation,
   L_OUT CuvkTask* pTask) {
@@ -837,7 +844,7 @@ CuvkResult L_EXPORT cuvkInvokeEvaluation(
 }
 
 
-CuvkTaskStatus L_EXPORT cuvkPoll(CuvkTask task) {
+CuvkTaskStatus L_STDCALL cuvkPoll(CuvkTask task) {
   auto& status = reinterpret_cast<Task*>(task)->status;
   try {
     if (status.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -852,6 +859,6 @@ CuvkTaskStatus L_EXPORT cuvkPoll(CuvkTask task) {
 }
 
 
-void L_EXPORT cuvkDestroyTask(CuvkTask task) {
+void L_STDCALL cuvkDestroyTask(CuvkTask task) {
   delete reinterpret_cast<Task*>(task);
 }

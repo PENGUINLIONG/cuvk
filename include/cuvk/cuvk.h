@@ -16,7 +16,12 @@
 // All exported CUVK functions use the standard call convention as normal stack
 // behavior.
 //
-#define L_EXPORT __stdcall
+#ifdef L_CUVK_COMPILE
+#define L_EXPORT extern "C" __declspec(dllexport)
+#else
+#define L_EXPORT extern "C" __declspec(dllimport)
+#endif 
+#define L_STDCALL __stdcall
 //
 // ### 1.2 Function parameters
 //
@@ -55,7 +60,7 @@ typedef CuvkBool CuvkResult;
 //
 // By default, log is written to standard error. To specify output file path:
 //
-extern "C" CuvkResult L_EXPORT cuvkRedirectLog(
+L_EXPORT CuvkResult L_STDCALL cuvkRedirectLog(
   const char* path
 );
 //
@@ -70,7 +75,7 @@ extern "C" CuvkResult L_EXPORT cuvkRedirectLog(
 //
 // ### 6.1 Initialize CUVK
 //
-extern "C" CuvkResult L_EXPORT cuvkInitialize(
+L_EXPORT CuvkResult L_STDCALL cuvkInitialize(
   CuvkBool debug
 );
 //
@@ -92,7 +97,7 @@ typedef struct CuvkContextInfo {} *CuvkContext;
 // context is built on a physical device. To enumerate physical devices that
 // satisfy CUVK's requirements:
 //
-extern "C" void L_EXPORT cuvkEnumeratePhysicalDevices(
+L_EXPORT void L_STDCALL cuvkEnumeratePhysicalDevices(
   L_INOUT CuvkSize* jsonSize,
   L_OUT char* pJson
 );
@@ -135,7 +140,7 @@ struct CuvkMemoryRequirements {
   // directly visible to the evaluation stage without transfer.
   CuvkBool shareBacteriaBuffer;
 };
-extern "C" CuvkResult L_EXPORT cuvkCreateContext(
+L_EXPORT CuvkResult L_STDCALL cuvkCreateContext(
   CuvkSize physicalDeviceIndex,
   L_INOUT CuvkMemoryRequirements memoryRequirements,
   L_OUT CuvkContext* pContext
@@ -154,7 +159,7 @@ extern "C" CuvkResult L_EXPORT cuvkCreateContext(
 // ensure all components rely on the context is release before calling to this
 // function.
 //
-extern "C" void L_EXPORT cuvkDestroyContext(
+L_EXPORT void L_STDCALL cuvkDestroyContext(
   CuvkContext context
 );
 //
@@ -202,7 +207,7 @@ struct DeformationInvocation {
   // Deformed bacteria as output.
   L_OUT void* pBacsOut;
 };
-extern "C" CuvkResult L_EXPORT cuvkInvokeDeformation(
+L_EXPORT CuvkResult L_STDCALL cuvkInvokeDeformation(
   CuvkContext context,
   const DeformationInvocation* pInvocation,
   L_OUT CuvkTask* pTask
@@ -233,7 +238,7 @@ struct EvaluationInvocation {
   // Costs.
   L_OUT void* pCosts;
 };
-extern "C" CuvkResult L_EXPORT cuvkInvokeEvaluation(
+L_EXPORT CuvkResult L_STDCALL cuvkInvokeEvaluation(
   CuvkContext context,
   const EvaluationInvocation* pInvocation,
   L_OUT CuvkTask* pTask
@@ -255,7 +260,7 @@ enum CuvkTaskStatus {
   CUVK_TASK_STATUS_OK        = 1,
   CUVK_TASK_STATUS_ERROR     = 2,
 };
-extern "C" CuvkTaskStatus L_EXPORT cuvkPoll(
+L_EXPORT CuvkTaskStatus L_STDCALL cuvkPoll(
   CuvkTask task
 );
 //
@@ -268,7 +273,7 @@ extern "C" CuvkTaskStatus L_EXPORT cuvkPoll(
 // ensure the task has completed; otherwise this call will block the current
 // thread until the task becomes completed.
 //
-extern "C" void L_EXPORT cuvkDestroyTask(
+L_EXPORT void L_STDCALL cuvkDestroyTask(
   CuvkTask task
 );
 

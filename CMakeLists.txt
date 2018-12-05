@@ -21,15 +21,29 @@ file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/deform.comp.spv
           ${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/cost.comp.spv
      DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/assets/shaders)
 
+add_subdirectory(third/fmt)
+
+add_definitions(-DL_CUVK_COMPILE)
+
+# CUVK test executable.
 add_executable(cuvk ${DIR_SRCS})
 target_include_directories(cuvk PRIVATE include
                                         ${Vulkan_INCLUDE_DIR}
                                         ${PNG_INCLUDE_DIR})
-
-add_subdirectory(third/fmt)
 target_link_libraries(cuvk PRIVATE fmt-header-only
                                    ${Vulkan_LIBRARIES}
                                    ${PNG_LIBRARIES})
-
 set_property(TARGET cuvk PROPERTY CXX_STANDARD 17)
 set_property(TARGET cuvk PROPERTY CXX_STANDARD_REQUIRED ON)
+
+# CUVK shared library.
+add_library(libcuvk SHARED ${DIR_SRCS})
+set_target_properties(libcuvk PROPERTIES PUBLIC_HEADER include/cuvk.h)
+target_include_directories(libcuvk PRIVATE include
+                                           ${Vulkan_INCLUDE_DIR}
+                                           ${PNG_INCLUDE_DIR})
+target_link_libraries(libcuvk PRIVATE fmt-header-only
+                                      ${Vulkan_LIBRARIES}
+                                      ${PNG_LIBRARIES})
+set_property(TARGET libcuvk PROPERTY CXX_STANDARD 17)
+set_property(TARGET libcuvk PROPERTY CXX_STANDARD_REQUIRED ON)
