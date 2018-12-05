@@ -470,7 +470,7 @@ CuvkResult L_STDCALL cuvkInitialize(CuvkBool debug) {
 void L_STDCALL cuvkEnumeratePhysicalDevices(L_OUT char* pJson,
   L_INOUT CuvkSize* jsonSize) {
   if (*jsonSize) {
-    *jsonSize = static_cast<CuvkSize>(phys_dev_json.size());
+    *jsonSize = static_cast<CuvkSize>(phys_dev_json.size() + 1);
   } else {
     std::memcpy(pJson, phys_dev_json.data(), *jsonSize);
   }
@@ -564,7 +564,7 @@ bool fill_deform(Task& task,
 }
 CuvkResult L_STDCALL cuvkInvokeDeformation(
   CuvkContext context,
-  const DeformationInvocation* pInvocation,
+  const CuvkDeformationInvocation* pInvocation,
   L_OUT CuvkTask* pTask) {
   auto invoke = *pInvocation;
   if (invoke.nSpec == 0) {
@@ -761,7 +761,7 @@ bool fill_eval_workset(Task& task,
 }
 CuvkResult L_STDCALL cuvkInvokeEvaluation(
   CuvkContext context,
-  const EvaluationInvocation* pInvocation,
+  const CuvkEvaluationInvocation* pInvocation,
   L_OUT CuvkTask* pTask) {
   auto invoke = *pInvocation;
   if (invoke.nBac == 0) {

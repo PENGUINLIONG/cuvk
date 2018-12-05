@@ -194,7 +194,7 @@ typedef struct CuvkTaskInfo {} *CuvkTask;
 // In the deformation stage, bacteria sets are expanded according to a set of
 // deformation specification.
 //
-struct DeformationInvocation {
+struct CuvkDeformationInvocation {
   // Deformation specification data buffer. Deform specs are not updated if this
   // field is `nullptr`.
   const void* pDeformSpecs;
@@ -209,7 +209,7 @@ struct DeformationInvocation {
 };
 L_EXPORT CuvkResult L_STDCALL cuvkInvokeDeformation(
   CuvkContext context,
-  const DeformationInvocation* pInvocation,
+  const CuvkDeformationInvocation* pInvocation,
   L_OUT CuvkTask* pTask
 );
 //
@@ -220,7 +220,7 @@ L_EXPORT CuvkResult L_STDCALL cuvkInvokeDeformation(
 //
 // In evaluation stage, bacteria are drawn to universes.
 //
-struct EvaluationInvocation {
+struct CuvkEvaluationInvocation {
   // Bacteria data buffer. If this field is `nullptr` input data is directly
   // taken from the output of deformation stage.
   const void* pBacs;
@@ -240,7 +240,7 @@ struct EvaluationInvocation {
 };
 L_EXPORT CuvkResult L_STDCALL cuvkInvokeEvaluation(
   CuvkContext context,
-  const EvaluationInvocation* pInvocation,
+  const CuvkEvaluationInvocation* pInvocation,
   L_OUT CuvkTask* pTask
 );
 //
