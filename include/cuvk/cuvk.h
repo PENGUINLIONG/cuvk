@@ -84,7 +84,11 @@ L_EXPORT CuvkResult L_STDCALL cuvkInitialize(
 //
 // **WARN** Extra validations will be done when debug mode is enabled. This
 // *may* slow down most of the Vulkan calls.
-
+//
+// ### 6.2 Deinitialize CUVK
+//
+L_EXPORT void L_STDCALL cuvkDeinitialize();
+//
 // ## 7 Contexts
 //
 // Context is an abstraction of Vulkan devices, where CUVK tasks are executed
@@ -204,6 +208,10 @@ struct CuvkDeformationInvocation {
   const void* pBacs;
   // Number of bacteria in `pBacteria`.
   CuvkSize nBac;
+  // The minimum universe ID what will be added to cells' original universeID.
+  CuvkSize baseUniv;
+  // The maximum universe ID occurred in the bacteria data + 1.
+  CuvkSize nUniv;
   // Deformed bacteria as output.
   L_OUT void* pBacsOut;
 };
@@ -230,7 +238,6 @@ struct CuvkEvaluationInvocation {
   L_OUT void* pSimUnivs;
   // Real universe.
   const void* pRealUniv;
-  CuvkSize realUnivSize;
   // Number of universes in `pSimUnivs`.
   CuvkSize nSimUniv;
   // ID of the fisrt universe in simulated universes.
