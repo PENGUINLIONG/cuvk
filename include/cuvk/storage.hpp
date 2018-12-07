@@ -57,7 +57,9 @@ struct DeviceMemorySlice {
   VkDeviceSize offset;
   VkDeviceSize size;
 
+  // Send data to the device memory.
   bool send(const void* data, size_t size) const noexcept;
+  // Fetch data from the device memory.
   bool fetch(L_OUT void* data, size_t size) const noexcept;
 private:
   void* map(size_t size) const noexcept;

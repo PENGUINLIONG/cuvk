@@ -355,14 +355,17 @@ void HeapManager::drop() noexcept {
     vkDestroyBuffer(ctxt->dev, buf_alloc.buf, nullptr);
     buf_alloc.buf = VK_NULL_HANDLE;
   }
+  buf_allocs.clear();
   for (auto& img_alloc : img_allocs) {
     vkDestroyImage(ctxt->dev, img_alloc.img, nullptr);
     img_alloc.img = VK_NULL_HANDLE;
   }
+  img_allocs.clear();
   for (auto& heap_alloc : heap_allocs) {
     vkFreeMemory(ctxt->dev, heap_alloc.second.dev_mem, nullptr);
     heap_alloc.second.dev_mem = VK_NULL_HANDLE;
   }
+  heap_allocs.clear();
 }
 HeapManager::~HeapManager() noexcept { drop(); }
 
@@ -519,6 +522,7 @@ bool HeapManager::bind_bufs() noexcept {
       return false;
     }
     LOG.info("bound image #{} to its memory allocation", i);
+    ++i;
   }
   return true;
 }
@@ -532,6 +536,7 @@ bool HeapManager::bind_imgs() noexcept {
       return false;
     }
     LOG.info("bound image #{} to its memory allocation", i);
+    ++i;
   }
   return true;
 }
