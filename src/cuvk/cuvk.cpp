@@ -545,7 +545,7 @@ bool check_dev_cap(const VkPhysicalDeviceLimits& limits,
     mem_req.nbac = limits.maxComputeWorkGroupCount[1];
   }
   if (limits.maxComputeWorkGroupInvocations <
-    mem_req.width * mem_req.height) {
+    mem_req.width * mem_req.height / 4) {
     LOG.error("number of pixels are greater than the maximum local invocation "
       "the device can handle (width*height={}, limit={})",
       mem_req.width * mem_req.height / 4,
@@ -556,7 +556,7 @@ bool check_dev_cap(const VkPhysicalDeviceLimits& limits,
     LOG.info("numer of universe exceeds the limit of device (nuniv={}, "
       "limit={})",
       mem_req.nuniv, limits.maxComputeWorkGroupCount[0]);
-    mem_req.nuniv = limits.maxComputeWorkGroupCount[0]
+    mem_req.nuniv = limits.maxComputeWorkGroupCount[0];
   }
   return true;
 }
