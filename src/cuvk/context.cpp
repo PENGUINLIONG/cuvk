@@ -21,7 +21,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL validation_cb(
   VkDebugUtilsMessageSeverityFlagBitsEXT lv,
   VkDebugUtilsMessageTypeFlagsEXT ty,
   const VkDebugUtilsMessengerCallbackDataEXT* data,
-  void* user_data) {
+  void* user_data) noexcept {
 
   LogLevel level;
   if (lv >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
@@ -39,8 +39,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL validation_cb(
 }
 
 
-
-bool Vulkan::make() {
+Vulkan::Vulkan() noexcept :
+  inst(VK_NULL_HANDLE),
+  phys_dev_infos(),
+  debug_msgr(VK_NULL_HANDLE) {}
+bool Vulkan::make() noexcept {
   LOG.info("creating vulkan instance");
 
   VkInstanceCreateInfo ici{};
@@ -54,7 +57,7 @@ bool Vulkan::make() {
   if (!enum_phys_dev()) { return false; }
   return true;
 }
-bool Vulkan::make_debug() {
+bool Vulkan::make_debug() noexcept {
   LOG.info("creating vulkan instance in debug mode");
 
   VkInstanceCreateInfo ici{};
@@ -94,12 +97,7 @@ bool Vulkan::make_debug() {
   if (!enum_phys_dev()) { return false; }
   return true;
 }
-void Vulkan::drop() {
-  LOG.info("invalidating vulkan instance");
-  if (inst) {
-    vkDestroyInstance(inst, nullptr);
-    inst = VK_NULL_HANDLE;
-  }
+void Vulkan::drop() noexcept {
   if (debug_msgr) {
     auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
       vkGetInstanceProcAddr(inst, "vkDestroyDebugUtilsMessengerEXT");
@@ -112,11 +110,15 @@ void Vulkan::drop() {
     debug_msgr = VK_NULL_HANDLE;
   }
   phys_dev_infos.clear();
+  if (inst) {
+    vkDestroyInstance(inst, nullptr);
+    inst = VK_NULL_HANDLE;
+  }
 }
-Vulkan::~Vulkan() { drop(); }
+Vulkan::~Vulkan() noexcept { drop(); }
 
 // Translate device type enums to C-string.
-constexpr const char* translate_dev_ty(VkPhysicalDeviceType ty) {
+constexpr const char* translate_dev_ty(VkPhysicalDeviceType ty) noexcept {
   switch (ty) {
   case VK_PHYSICAL_DEVICE_TYPE_OTHER: return "Other";
   case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "IntegratedGpu";
@@ -126,7 +128,7 @@ constexpr const char* translate_dev_ty(VkPhysicalDeviceType ty) {
   }
   return "Unknown";
 }
-bool Vulkan::enum_phys_dev() {
+bool Vulkan::enum_phys_dev() noexcept {
   LOG.info("enumerating physical devices");
   uint32_t count;
   if (L_VK <- vkEnumeratePhysicalDevices(inst, &count, nullptr)) {
@@ -194,7 +196,7 @@ bool Context::make() noexcept {
     // For each queue family.
     for (auto j = 0; j < queue_fam_props.size(); ++j ) {
       // Check if capabilities are matching.
-      if (queue_fam_props[j].queueFlags & queue_caps[i] == queue_caps[i]) {
+      if ((queue_fam_props[j].queueFlags & queue_caps[i]) == queue_caps[i]) {
         VkDeviceQueueCreateInfo dqci {};
         dqci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
         dqci.queueFamilyIndex = j;

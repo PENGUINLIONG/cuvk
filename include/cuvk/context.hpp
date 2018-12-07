@@ -16,13 +16,14 @@ struct Vulkan {
   std::vector<PhysicalDeviceInfo> phys_dev_infos;
   VkDebugUtilsMessengerEXT debug_msgr;
 
-  bool make();
-  bool make_debug();
-  void drop();
-  ~Vulkan();
+  Vulkan() noexcept;
+  bool make() noexcept;
+  bool make_debug() noexcept;
+  void drop() noexcept;
+  ~Vulkan() noexcept;
 
 private:
-  bool enum_phys_dev();
+  bool enum_phys_dev() noexcept;
 };
 
 
