@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -47,6 +48,7 @@ private:
   std::mutex _sync;
   std::queue<LogMessage> _msgs;
   std::thread _th;
+  std::atomic_bool _stop;
 
 public:
   static const LogLevel DEBUG;
@@ -58,6 +60,9 @@ public:
   Logger();
   Logger(const Logger&) = delete;
   Logger& operator=(const Logger&) = delete;
+
+  bool make() noexcept;
+  void drop() noexcept;
 
   template<typename ... TArgs>
   void log(const LogLevel level,

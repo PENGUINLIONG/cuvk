@@ -13,6 +13,9 @@ namespace detail {
   using namespace std::chrono_literals;
   void log_thread_main(Logger& logger) {
     for (;;) {
+      if (logger._stop.load(std::memory_order_acquire)) {
+        return;
+      }
       if (logger._msgs.empty()) { continue; }
       {
         std::scoped_lock lk(logger._sync);
@@ -40,8 +43,23 @@ Logger::Logger() :
   _sync(),
   _msgs(),
   _start(std::chrono::high_resolution_clock::now()),
-  _th([this] { detail::log_thread_main(*this); }) {
+  _th() {
+}
+bool Logger::make() noexcept {
+  if (_th.joinable()) {
+    // Alreeady started; keep it.
+    return true;
+  }
+  _th = std::thread([this] { detail::log_thread_main(*this); });
   _th.detach();
+  return true;
+}
+
+void Logger::drop() noexcept {
+  if (_th.joinable()) {
+    _stop.store(true);
+    _th.join();
+  }
 }
 
 const LogLevel Logger::DEBUG = "DEBUG";
