@@ -8,9 +8,7 @@ L_CUVK_BEGIN_
 ShaderStage::operator VkPipelineShaderStageCreateInfo() const noexcept {
   return {
     VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr,
-    0, stage, shader->shader, entry,
-    // TODO: Specialization.
-    nullptr,
+    0, stage, shader->shader, entry
   };
 }
 
@@ -61,6 +59,7 @@ void ShaderManager::drop() noexcept {
       shader.shader = VK_NULL_HANDLE;
     }
   }
+  shaders.clear();
 }
 ShaderManager::~ShaderManager() noexcept { drop(); }
 
@@ -143,8 +142,7 @@ const GraphicsPipeline& PipelineManager::declare_graph_pipe(
   GraphicsPipeline pipe {
     ctxt,
     name,
-    stages,
-    push_const_rngs,
+    stages, push_const_rngs,
     { in_binds, in_attrs, out_blends, out_attach_descs,
       out_attach_refs },
     { layout_binds },
@@ -159,8 +157,16 @@ const ComputePipeline& PipelineManager::declare_comp_pipe(
   const char* name,
   const ShaderStage* stage,
   L_STATIC Span<VkPushConstantRange> push_const_rngs,
-  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds) noexcept {
-  ComputePipeline pipe { ctxt, name, stage, push_const_rngs };
+  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
+  std::optional<std::array<uint32_t, 3>> local_workgrp_size) noexcept {
+  ComputePipeline pipe {
+    ctxt,
+    name,
+    stage, push_const_rngs,
+    local_workgrp_size,
+    {},
+    VK_NULL_HANDLE, VK_NULL_HANDLE
+  };
   pipe.desc_set_layout.layout_binds = std::move(layout_binds);
 
   return comp_pipes.emplace_back(std::move(pipe));
@@ -193,7 +199,7 @@ bool PipelineManager::make_layouts(
   VkDescriptorSetLayoutCreateInfo dslci{};
   dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
   dslci.pBindings = layout_binds.data();
-  dslci.bindingCount = layout_binds.size();
+  dslci.bindingCount = static_cast<uint32_t>(layout_binds.size());
 
   if (L_VK <- vkCreateDescriptorSetLayout(
       ctxt->dev, &dslci, nullptr, &desc_set_layout)) {
@@ -386,10 +392,39 @@ bool PipelineManager::make_comp_pipes() noexcept {
       return false;
     }
 
+    VkSpecializationInfo si {};
+    std::array<VkSpecializationMapEntry, 3> smes {};
+
     VkComputePipelineCreateInfo cpci{};
     cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     cpci.layout = pipe.pipe_layout;
     cpci.stage = *pipe.stage;
+
+    if (pipe.local_workgrp_size.has_value()) {
+      smes[0].constantID = 1;
+      smes[0].size = sizeof(uint32_t);
+      smes[0].offset = 0;
+
+      smes[1].constantID = 2;
+      smes[1].size = sizeof(uint32_t);
+      smes[1].offset = sizeof(uint32_t);
+
+      smes[2].constantID = 3;
+      smes[2].size = sizeof(uint32_t);
+      smes[2].offset = 2 * sizeof(uint32_t);
+
+      si.mapEntryCount = static_cast<uint32_t>(smes.size());
+      si.pMapEntries = smes.data();
+      si.dataSize = sizeof(uint32_t) * pipe.local_workgrp_size->size();
+      si.pData = pipe.local_workgrp_size->data();
+
+      LOG.info("compute pipeline '{}' has specialized its workgroups to "
+        "({}, {}, {})", pipe.name,
+        pipe.local_workgrp_size->at(0),
+        pipe.local_workgrp_size->at(1),
+        pipe.local_workgrp_size->at(2));
+      cpci.stage.pSpecializationInfo = &si;
+    }
 
     if (L_VK <- vkCreateComputePipelines(ctxt->dev,
       VK_NULL_HANDLE, 1, &cpci, nullptr, &pipe.pipe)) {
@@ -423,8 +458,13 @@ void PipelineManager::drop_graph_pipes() noexcept {
         ctxt->dev, pipe.desc_set_layout.desc_set_layout, nullptr);
       pipe.desc_set_layout.desc_set_layout = VK_NULL_HANDLE;
     }
+    if (pipe.framebuf) {
+      vkDestroyFramebuffer(ctxt->dev, pipe.framebuf, nullptr);
+      pipe.framebuf = VK_NULL_HANDLE;
+    }
   }
   LOG.info("dropped all {} graphics pipelines", graph_pipes.size());
+  graph_pipes.clear();
 }
 void PipelineManager::drop_comp_pipes() noexcept {
   for (auto& pipe : comp_pipes) {
@@ -432,8 +472,18 @@ void PipelineManager::drop_comp_pipes() noexcept {
       vkDestroyPipeline(ctxt->dev, pipe.pipe, nullptr);
       pipe.pipe = VK_NULL_HANDLE;
     }
+    if (pipe.pipe_layout) {
+      vkDestroyPipelineLayout(ctxt->dev, pipe.pipe_layout, nullptr);
+      pipe.pipe_layout = VK_NULL_HANDLE;
+    }
+    if (pipe.desc_set_layout.desc_set_layout) {
+      vkDestroyDescriptorSetLayout(
+        ctxt->dev, pipe.desc_set_layout.desc_set_layout, nullptr);
+      pipe.desc_set_layout.desc_set_layout = VK_NULL_HANDLE;
+    }
   }
   LOG.info("dropped all {} compute pipelines", comp_pipes.size());
+  comp_pipes.clear();
 }
 
 

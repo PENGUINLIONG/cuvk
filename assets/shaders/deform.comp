@@ -77,8 +77,12 @@ buffer bacs_out_buf {
 // Push Constants
 // --------------
 layout(std430, push_constant) uniform DeformMeta {
-  //  Number of deform specs.
-  uint DEFORM_SPECS_SIZE;
+  // Number of bacteria inputs.
+  uint NBAC;
+  // The minimum universe ID what will be added to cells' original universeID.
+  uint BASE_UNIV;
+  // The number of universes.
+  uint NUNIV;
 };
 
 
@@ -93,6 +97,6 @@ void main() {
   bac.pos += spec.translate;
   bac.size *= spec.stretch;
   bac.orient += spec.rotate;
-  bac.univ += deform_idx * DEFORM_SPECS_SIZE;
-  bacs_out[bac_idx + deform_idx * DEFORM_SPECS_SIZE] = bac;
+  bac.univ += BASE_UNIV + deform_idx * NUNIV;
+  bacs_out[bac_idx + deform_idx * NBAC] = bac;
 }

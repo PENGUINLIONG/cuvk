@@ -84,48 +84,58 @@ void main() {
   float sin_o = sin(bac.orient);
   float cos_o = cos(bac.orient);
   mat2x2 rotate = { { cos_o, -sin_o }, { sin_o, cos_o } };
-  
+
+
   // Right of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(len + r, 0.0), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, -trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the cylindrical part.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(len, r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the cylindrical part.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(len, -r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the cylindrical part.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(-len, r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the cylindrical part.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(-len, -r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, -trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left of the round tip.
+  gl_Layer = int(bac.univ - BASE_UNIV);
   gl_Position = calc_pos(rotate, vec2(-len - r, 0.0), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
 
-  gl_Layer = int(bac.univ - BASE_UNIV);
   EndPrimitive();
 }

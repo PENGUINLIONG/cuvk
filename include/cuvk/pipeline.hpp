@@ -28,6 +28,11 @@ struct ShaderStage {
   L_STATIC const char* entry;
   VkShaderStageFlagBits stage;
 
+  // Specialization.
+  L_STATIC Span<VkSpecializationMapEntry> spec_entries;
+  L_STATIC Span<int32_t> spec_data;
+  VkSpecializationInfo spec_info;
+
   operator VkPipelineShaderStageCreateInfo() const noexcept;
 };
 struct Shader {
@@ -113,8 +118,8 @@ struct GraphicsPipeline {
   const Context* ctxt;
   const char* name;
 
-  Span<ShaderStage> stages;
-  Span<VkPushConstantRange> push_const_rngs;
+  L_STATIC Span<ShaderStage> stages;
+  L_STATIC Span<VkPushConstantRange> push_const_rngs;
 
   GraphicsIORequirements graph_io_req;
 
@@ -134,9 +139,10 @@ struct ComputePipeline {
   const Context* ctxt;
   const char* name;
 
-  const ShaderStage* stage;
-  Span<VkPushConstantRange> push_const_rngs;
+  L_STATIC const ShaderStage* stage;
+  L_STATIC Span<VkPushConstantRange> push_const_rngs;
 
+  std::optional<std::array<uint32_t, 3>> local_workgrp_size;
   DescriptorSetLayout desc_set_layout;
 
   VkPipeline pipe;
@@ -166,7 +172,8 @@ struct PipelineManager {
   const ComputePipeline& declare_comp_pipe(const char* name,
     const ShaderStage* stage,
     L_STATIC Span<VkPushConstantRange> push_const_rngs,
-    L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds) noexcept;
+    L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
+    std::optional<std::array<uint32_t, 3>> local_workgrp) noexcept;
 
   PipelineManager(const Context& ctxt) noexcept;
   bool make() noexcept;

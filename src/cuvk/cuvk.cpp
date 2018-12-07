@@ -58,7 +58,7 @@ const std::array<VkDescriptorSetLayoutBinding, 3> deform_layout_binds {
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
 };
 const std::array<VkPushConstantRange, 1> deform_push_const_range {
-  VkPushConstantRange { VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 },
+  VkPushConstantRange { VK_SHADER_STAGE_COMPUTE_BIT, 0, 12 },
 };
 
 const std::array<VkDescriptorSetLayoutBinding, 0> eval_layout_binds {
@@ -101,22 +101,28 @@ const std::array<VkAttachmentReference, 1> eval_out_attach_refs {
   { 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
 };
 
+const std::array<VkSpecializationMapEntry, 3> cost_comp_spec_entries {
+  VkSpecializationMapEntry
+  { 1, 0                   , sizeof(uint32_t) },
+  { 2, 1 * sizeof(uint32_t), sizeof(uint32_t) },
+  { 3, 2 * sizeof(uint32_t), sizeof(uint32_t) },
+};
 const std::array<VkDescriptorSetLayoutBinding, 4> cost_layout_binds {
   VkDescriptorSetLayoutBinding
-  // Bacterium[] bacs
+  // image2D real_univ
   { 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
-  // image2D real_univ
+  // image2DArray sim_univs
   { 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
-  // image2DArray real_univ
+  // float[] temp
   { 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
   // float[] costs
   { 3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
 };
-const std::array<VkPushConstantRange, 1> cost_push_const_rng{
+const std::array<VkPushConstantRange, 1> cost_push_const_rng {
   VkPushConstantRange { VK_SHADER_STAGE_COMPUTE_BIT, 0, 12 },
 };
 
@@ -268,11 +274,31 @@ std::array<VkQueueFlags, 1> CUVK_QUEUE_CAPS = {
 };
 VkPhysicalDeviceFeatures CUVK_PHYS_DEV_FEAT = cuvk_phys_dev_feat();
 
+// Find the last power of 2 that is contained by the given value.
+template<typename T>
+constexpr T last_pow_2(T a) {
+  auto i = sizeof(T) * 8;
+  while (i-- && a >> i == 0) {}
+  return 1 << i;
+}
+// Find the a power of 2 that can contain the given value.
+template<typename T>
+constexpr T next_pow_2(T a) {
+  for (int i = 0; i < sizeof(T) * 8; ++i) {
+    if ((1 << i) > a) {
+      return i << i;
+    }
+  }
+}
+
 struct Cuvk {
 
   Context ctxt;
   // We can't submit queues asynchronously.
   std::mutex submit_sync;
+
+
+  std::array<uint32_t, 3> univ_extent;
 
 
   ShaderManager shader_mgr;
@@ -305,12 +331,18 @@ struct Cuvk {
   const GraphicsPipeline* eval_pipe;
   const ComputePipeline* cost_pipe;
 
-  
+
 
   Cuvk(const PhysicalDeviceInfo& phys_dev_info,
     const CuvkMemoryRequirements& mem_req,
     const MemoryAllocationGuidelines& guide) :
     ctxt(phys_dev_info, CUVK_PHYS_DEV_FEAT, CUVK_QUEUE_CAPS),
+
+    univ_extent({
+      static_cast<uint32_t>(mem_req.width),
+      static_cast<uint32_t>(mem_req.height),
+      1,
+    }),
 
     // Compile shaders.
     shader_mgr(ctxt),
@@ -399,13 +431,18 @@ struct Cuvk {
     }),
 
     deform_pipe(&pipe_mgr.declare_comp_pipe("deform", &deform_stage,
-      deform_push_const_range, deform_layout_binds)),
+      deform_push_const_range, deform_layout_binds, {})),
     eval_pipe(&pipe_mgr.declare_graph_pipe("eval", eval_stages,
       eval_push_const_range, eval_layout_binds,
       eval_in_binds, eval_in_attrs, eval_out_blends,
       eval_out_attach_descs, eval_out_attach_refs, eval_alloc.sim_univs)),
     cost_pipe(&pipe_mgr.declare_comp_pipe("cost", &cost_stage,
-      cost_push_const_rng, cost_layout_binds)) {}
+      cost_push_const_rng, cost_layout_binds, {{
+        static_cast<uint32_t>(mem_req.width / 2),
+        static_cast<uint32_t>(mem_req.height / 2),
+        static_cast<uint32_t>(1),
+      }
+    })) {}
 
   bool make() {
     return ctxt.make() &&
@@ -454,6 +491,10 @@ CuvkResult L_STDCALL cuvkRedirectLog(const char* path) {
 }
 
 CuvkResult L_STDCALL cuvkInitialize(CuvkBool debug) {
+  if (!LOG.make()) {
+    printf("failed to set up logger");
+    std::terminate();
+  }
   if (debug) {
     if (!vk.make_debug()) {
       return false;
@@ -472,8 +513,58 @@ void L_STDCALL cuvkEnumeratePhysicalDevices(L_OUT char* pJson,
   if (*jsonSize) {
     *jsonSize = static_cast<CuvkSize>(phys_dev_json.size() + 1);
   } else {
-    std::memcpy(pJson, phys_dev_json.data(), *jsonSize);
+    std::memcpy(pJson, phys_dev_json.c_str(), *jsonSize);
   }
+}
+
+L_EXPORT void L_STDCALL cuvkDeinitialize() {
+  vk.drop();
+  LOG.drop();
+}
+
+bool check_dev_cap(const VkPhysicalDeviceLimits& limits,
+  L_INOUT CuvkMemoryRequirements& mem_req) {
+  LOG.warning("as cuvk is still in progress, some variables can be constrained "
+    "by hardware limits until workarounds are implemented");
+  if (limits.maxImageArrayLayers < mem_req.nuniv) {
+    LOG.info("number of universes rendered in one eval task exceeds the limit "
+      "of device (nuniv={}; limit={})",
+      mem_req.nuniv, limits.maxFramebufferLayers);
+    mem_req.nuniv = limits.maxFramebufferLayers;
+  }
+  if (limits.maxComputeWorkGroupCount[0] < mem_req.nspec) {
+    LOG.info("number of deform specs used in deform task exceeds the limit of "
+      "device (nspec={}; limit={})",
+      mem_req.nspec, limits.maxComputeWorkGroupCount[0]);
+    mem_req.nspec = limits.maxComputeWorkGroupCount[0];
+  }
+  if (limits.maxComputeWorkGroupCount[1] < mem_req.nbac) {
+    LOG.info("number of bacteria used in deform task exceeds the limit of "
+      "device (nbac={}; limit={})",
+      mem_req.nbac, limits.maxComputeWorkGroupCount[1]);
+    mem_req.nbac = limits.maxComputeWorkGroupCount[1];
+  }
+  if (limits.maxComputeWorkGroupInvocations <
+    mem_req.width * mem_req.height) {
+    LOG.error("number of pixels are greater than the maximum local invocation "
+      "the device can handle (width*height={}, limit={})",
+      mem_req.width * mem_req.height,
+      limits.maxComputeWorkGroupInvocations);
+    return false;
+  }
+  if (limits.maxComputeWorkGroupCount[0] < mem_req.width) {
+    LOG.error("width of universe exceeds the limit of device (width={}, "
+      "limit={})",
+      mem_req.width, limits.maxComputeWorkGroupCount[0]);
+    return false;
+  }
+  if (limits.maxComputeWorkGroupCount[1] < mem_req.height) {
+    LOG.error("height of universe exceeds the limit of device (height={}, "
+      "limit={})",
+      mem_req.height, limits.maxComputeWorkGroupCount[1]);
+    return false;
+  }
+  return true;
 }
 
 CuvkResult L_STDCALL cuvkCreateContext(
@@ -482,39 +573,14 @@ CuvkResult L_STDCALL cuvkCreateContext(
   L_OUT CuvkContext* pContext) {
   auto& phys_dev_info = vk.phys_dev_infos[physicalDeviceIndex];
   auto& limits = phys_dev_info.phys_dev_props.limits;
-  if (limits.maxImageArrayLayers < memoryRequirements.nuniv) {
-    LOG.info("number of universes rendered in one eval task exceeds the limit "
-      "of device (nuniv={}; limit={})",
-      memoryRequirements.nuniv, limits.maxImageArrayLayers);
-    memoryRequirements.nuniv = limits.maxImageArrayLayers;
-  }
-  if (limits.maxComputeWorkGroupCount[0] < memoryRequirements.nspec) {
-    LOG.info("number of deform specs used in deform task exceeds the limit of "
-      "device (nspec={}; limit={})",
-      memoryRequirements.nspec, limits.maxComputeWorkGroupCount[0]);
-    memoryRequirements.nspec = limits.maxComputeWorkGroupCount[0];
-  }
-  if (limits.maxComputeWorkGroupCount[1] < memoryRequirements.nbac) {
-    LOG.info("number of bacteria used in deform task exceeds the limit of "
-      "device (nbac={}; limit={})",
-      memoryRequirements.nbac, limits.maxComputeWorkGroupCount[1]);
-    memoryRequirements.nbac = limits.maxComputeWorkGroupCount[1];
-  }
-  if (limits.maxComputeWorkGroupCount[0] < memoryRequirements.width) {
-    LOG.error("width of universe exceeds the limit of device (width={}, "
-      "limit={})",
-      memoryRequirements.height, limits.maxComputeWorkGroupCount[0]);
+  // Ensure device is capable of the CUVK tasks.
+  if (!check_dev_cap(limits, memoryRequirements)) {
     return false;
   }
-  if (limits.maxComputeWorkGroupCount[1] < memoryRequirements.height) {
-    LOG.error("height of universe exceeds the limit of device (height={}, "
-      "limit={})",
-      memoryRequirements.height, limits.maxComputeWorkGroupCount[1]);
-    return false;
-  }
+  // Create the context.
   auto rv = new Cuvk(
     phys_dev_info, memoryRequirements,
-    MemoryAllocationGuidelines(phys_dev_info, memoryRequirements));
+    MemoryAllocationGuidelines(phys_dev_info, L_INOUT memoryRequirements));
   if (rv->make()) {
     (*pContext) = reinterpret_cast<CuvkContext>(rv);
     return true;
@@ -532,10 +598,12 @@ void L_STDCALL cuvkDestroyContext(
 bool fill_deform(Task& task,
   BufferSlice deform_specs, uint32_t nspec,
   BufferSlice bacs, uint32_t nbac,
-  BufferSlice bacs_out) {
+  uint32_t base_univ, uint32_t nuniv, BufferSlice bacs_out) {
 
   auto rec = task.exec.record();
   if (!rec.begin()) { return false; }
+
+  std::array<uint32_t, 3> meta = { nbac, base_univ, nuniv };
 
   rec
     // -------------------------------------------------------------------------
@@ -551,7 +619,7 @@ bool fill_deform(Task& task,
     // -------------------------------------------------------------------------
     // Dispatch cell deformation.
     .push_const(*task.ctxt.deform_pipe,
-      0, sizeof(uint32_t), &nspec)
+      0, static_cast<uint32_t>(meta.size() * sizeof(uint32_t)), meta.data())
     .dispatch(*task.ctxt.deform_pipe, &task.desc_set, nspec, nbac, 1)
     // -------------------------------------------------------------------------
     // Wait for host to read.
@@ -603,7 +671,7 @@ CuvkResult L_STDCALL cuvkInvokeDeformation(
     if (!fill_deform(*task,
       ctxt->deform_alloc.deform_specs, invoke.nSpec,
       ctxt->deform_alloc.bacs, invoke.nBac,
-      ctxt->deform_alloc.bacs_out)) {
+      invoke.baseUniv, invoke.nUniv, ctxt->deform_alloc.bacs_out)) {
       LOG.error("unable to fill command buffer with deform task commands");
       return CUVK_TASK_STATUS_ERROR;
     }
@@ -671,13 +739,13 @@ bool fill_eval_workset(Task& task,
   BufferSlice costs) {
 
   auto extent = real_univ.img_slice.img_alloc->req.extent;
-  auto half_w = extent.width / 2;
-  auto half_h = extent.height / 2;
+  auto half_w = static_cast<int32_t>(extent.width / 2);
+  auto half_h = static_cast<int32_t>(extent.height / 2);
 
   auto rec = task.exec.record();
   if (!rec.begin()) { return false; }
 
-  std::array<uint32_t, 3> meta = { half_w, half_h, half_w * half_h };
+  std::array<int32_t, 3> meta = { half_w, half_h, half_w * half_h };
 
   rec
     // -------------------------------------------------------------------------
@@ -750,7 +818,7 @@ bool fill_eval_workset(Task& task,
     // Dispatch cost computation.
     .push_const(*task.ctxt.cost_pipe,
       0, static_cast<uint32_t>(meta.size() * sizeof(uint32_t)), meta.data())
-    .dispatch(*task.ctxt.cost_pipe, &task.desc_set, half_w, half_h, nuniv)
+    .dispatch(*task.ctxt.cost_pipe, &task.desc_set, nuniv, 1, 1)
     // -------------------------------------------------------------------------
     // Wait the costs to be computed and to be visible to host.
     .from_stage(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)
@@ -821,7 +889,7 @@ CuvkResult L_STDCALL cuvkInvokeEvaluation(
 
       // Send inputs to device.
       if (invoke.pBacs != nullptr) {
-        if (!ctxt->deform_alloc.bacs.dev_mem_view().send(//////////////
+        if (!ctxt->eval_alloc.bacs.dev_mem_view().send(
           invoke.pBacs, invoke.nBac * sizeof(Bacterium))) {
           LOG.error("unable to send bacteria input");
           return CUVK_TASK_STATUS_ERROR;
@@ -829,7 +897,7 @@ CuvkResult L_STDCALL cuvkInvokeEvaluation(
       }
       if (invoke.pRealUniv != nullptr) {
         if (!ctxt->staging_alloc.real_univ_staging.dev_mem_view().send(
-          invoke.pRealUniv, invoke.realUnivSize)) {
+          invoke.pRealUniv, extent.width * extent.height * sizeof(float))) {
           LOG.error("unable to send real universe input");
           return CUVK_TASK_STATUS_ERROR;
         }

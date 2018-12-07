@@ -2,6 +2,7 @@
 // Cost Computation Shader Program (1/1)
 // -------------------------------------
 // Compute the cost of each universe.
+// TODO (penguinliong): Use buffer texture later.
 //L
 #version 450
 precision mediump float;
@@ -13,10 +14,24 @@ precision mediump float;
 // ----------
 //  When jobs are dispatched to this shader, the workgroup sizes should be
 //  specified as the following:
-//    x = x index from 0 to HALF of the universe width;
-//    y = y index from 0 to HALF of the universe height;
-//    z = universe ID.
+//    x = universe ID.
 // in uvec3 gl_GlobalInvocationID;
+//L
+
+
+
+//
+// Local Invocation
+// ----------------
+//  These values are specialized at runtime.
+//    HALF of the width of universes;
+layout(local_size_x=1, local_size_x_id=1) in;
+//    HALF of the height of universes.
+layout(local_size_y=1, local_size_y_id=2) in;
+//    Reserved.
+layout(local_size_z=1, local_size_z_id=3) in;
+// Constant ID are started from 1 because some Nvidia driver have problem
+// starting from 0.
 //L
 
 
@@ -33,7 +48,7 @@ layout(r32f, binding=1) readonly
 uniform image2DArray sim_univs;
 //  Temporary shared buffer for sum calculation. Should have length of
 //  `(UNIV_WIDTH * UNIV_HEIGHT * NUNIV / 4)`.
-layout(std430, binding=2)
+layout(std430, binding=2) coherent
 buffer sum_temp_buf {
   float[] sum_temp;
 };
@@ -55,9 +70,9 @@ buffer costs_buf {
 // --------------
 layout(std430, push_constant) uniform DeformMeta {
   // Half extent of input universes, i.e. vec2(univ.width / 2, univ.height / 2).
-  uvec2 HALF_UNIV_EXTENT;
+  ivec2 HALF_UNIV_EXTENT;
   // The size in floats of a single input universe (layer).
-  uint HALF_UNIV_SIZE;
+  int HALF_UNIV_SIZE;
 };
 
 
@@ -81,35 +96,34 @@ float block_diff(ivec2 pos, int univ) {
 }
 
 void main() {
-  int x = int(gl_GlobalInvocationID.x);
-  int y = int(gl_GlobalInvocationID.y);
-  int univ = int(gl_GlobalInvocationID.z);
+  int x = int(gl_LocalInvocationID.x);
+  int y = int(gl_LocalInvocationID.y);
+  // NOT THIS: int univ = int(gl_GlobalInvocationID.x);
+  int univ = int(gl_WorkGroupID.x);
 
-  int univ_offset = int(univ * HALF_UNIV_SIZE);
-  int pos_offset = int(y * HALF_UNIV_EXTENT.x) + x;
+  int univ_offset = univ * HALF_UNIV_SIZE;
+  int pos_offset = y * HALF_UNIV_EXTENT.x + x;
   int offset = univ_offset + pos_offset;
 
-  // Sum up first step for all universes.
-  sum_temp[offset] = block_diff(ivec2(x * 2, y * 2), univ);
+  // Sum up first step for all universes. Fill `sum_temp` with partial sums.
+  sum_temp[offset] = block_diff(ivec2(x << 1, y << 1), univ);
+  memoryBarrier();
   barrier();
 
-  // Now `sum_temp` is filled with values. Its size for each universe is
-  // `HALF_UNIS_SIZE`.
-  int s = int(HALF_UNIV_SIZE);
-  while (s > 1) {
-    int half_s = s / 2;
+  // Now `sum_temp` is filled with values. Its size for each universe remainder
+  // is `HALF_UNIS_SIZE`.
+  for (int s = int(HALF_UNIV_SIZE); s > 1;) {
+    int half_s = s >> 1;
+    // Keep the one in middle when `s` is an odd number.
+    int adjusted_half_s = half_s + (s & 1);
     if (pos_offset < half_s) {
-      sum_temp[offset] += sum_temp[offset + half_s];
-      s = half_s;
-    } else if (pos_offset == half_s && (s & 1) == 1) {
-      // When the size is an odd number, the extra one should be preserved.
-      sum_temp[offset] = sum_temp[offset + half_s];
-      s = half_s + 1;
+      sum_temp[offset] += sum_temp[offset + adjusted_half_s];
+      s = adjusted_half_s;
+      memoryBarrier();
+      barrier();
     } else {
-      // Thread is finished.
       return;
     }
-    barrier();
   }
 
   costs[univ] = sum_temp[univ_offset];
