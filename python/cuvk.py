@@ -1,7 +1,10 @@
 from ctypes import *
+from os import environ
 
-LIBCUVK = windll.LoadLibrary("./build/Debug/libcuvk.dll")
-
+if environ.get("L_DEV") == "1":
+    LIBCUVK = windll.LoadLibrary("build/Debug/libcuvk.dll")
+else:
+    LIBCUVK = windll.LoadLibrary("lib/libcuvk.dll")
 CUVK = None
 
 class CuvkInstance:
