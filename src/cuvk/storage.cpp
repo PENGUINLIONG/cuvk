@@ -90,6 +90,13 @@ bool DeviceMemorySlice::fetch(L_OUT void* data, size_t size) const noexcept {
   unmap();
   return true;
 }
+bool DeviceMemorySlice::wipe() const noexcept {
+  auto dev_data = map(size);
+  if (dev_data == nullptr) { return false; }
+  std::memset(dev_data, 0, size);
+  unmap();
+  return true;
+}
 void* DeviceMemorySlice::map(size_t size) const noexcept {
   if (size > this->size) {
     LOG.error("memory write out of range");

@@ -61,6 +61,8 @@ struct DeviceMemorySlice {
   bool send(const void* data, size_t size) const noexcept;
   // Fetch data from the device memory.
   bool fetch(L_OUT void* data, size_t size) const noexcept;
+  // Wipe out the memory with 0.
+  bool wipe() const noexcept;
 private:
   void* map(size_t size) const noexcept;
   void unmap() const noexcept;
