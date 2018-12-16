@@ -1,24 +1,12 @@
 #pragma once
 #include "cuvk/comdef.hpp"
 #include "cuvk/span.hpp"
-#include "cuvk/storage.hpp"
 #include <vector>
-#include <vulkan/vulkan.h>
 
 L_CUVK_BEGIN_
 
-struct Context; // External dependency.
-
-struct ShaderStage;
-struct Shader;
-
-struct ShaderManager;
-
-struct DescriptorSetLayout;
-struct DescriptorSet;
-
-struct GraphicsPipeline;
-struct ComputePipeline;
+extern struct Context;
+extern struct ImageView;
 
 
 
@@ -86,8 +74,8 @@ struct DescriptorSet {
   VkDescriptorPool desc_pool;
   VkDescriptorSet desc_set;
 
-  DescriptorSet(const Context& ctxt, const GraphicsPipeline& pipe) noexcept;
-  DescriptorSet(const Context& ctxt, const ComputePipeline& pipe) noexcept;
+  DescriptorSet(const Context& ctxt,
+    const DescriptorSetLayout& desc_set_layout) noexcept;
   bool make() noexcept;
   void drop() noexcept;
   ~DescriptorSet() noexcept;
@@ -104,16 +92,45 @@ struct DescriptorSet {
 
 
 
-struct GraphicsIORequirements {
-  L_STATIC Span<VkVertexInputBindingDescription> in_binds;
-  L_STATIC Span<VkVertexInputAttributeDescription> in_attrs;
-  L_STATIC Span<VkPipelineColorBlendAttachmentState> out_blends;
-  L_STATIC Span<VkAttachmentDescription> out_attach_descs;
-  L_STATIC Span<VkAttachmentReference> out_attach_refs;
-  // If `viewport` doesn't have an value, it means that the viewport info is
-  // updated on each draw, and a pipeline dynamic state with
-  // `VK_DYNAMIC_STATE_VIEWPORT` is created.
+struct RenderPass {
+  L_STATIC Span<VkAttachmentDescription> attach_descs;
+  L_STATIC Span<VkAttachmentReference> attach_refs;
+
+  VkRenderPass pass;
 };
+
+
+
+struct FramebufferRequirements {
+  L_STATIC Span<const ImageView*> attaches;
+  VkExtent2D extent;
+  uint32_t nlayer;
+};
+struct Framebuffer {
+  const Context* ctxt;
+  const RenderPass* pass;
+
+  FramebufferRequirements req;
+
+  VkFramebuffer framebuf;
+
+  Framebuffer(const Context& ctxt, const RenderPass& pass,
+    L_STATIC Span<const ImageView*> attaches,
+    VkExtent2D extent, uint32_t nlayer) noexcept;
+  bool make() noexcept;
+  void drop() noexcept;
+  ~Framebuffer() noexcept;
+
+  Framebuffer(const Framebuffer&) = delete;
+  Framebuffer& operator=(const Framebuffer&) = delete;
+
+  Framebuffer(Framebuffer&& rv) noexcept;
+};
+
+
+
+// TODO: (penguinliong) The current implementation only allow a single subpass.
+// See if multi-subpass is needed, or it just a non-goal.
 struct GraphicsPipeline {
   const Context* ctxt;
   const char* name;
@@ -121,19 +138,25 @@ struct GraphicsPipeline {
   L_STATIC Span<ShaderStage> stages;
   L_STATIC Span<VkPushConstantRange> push_const_rngs;
 
-  GraphicsIORequirements graph_io_req;
+  L_STATIC Span<VkVertexInputBindingDescription> vert_binds;
+  L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs;
+  L_STATIC Span<VkPipelineColorBlendAttachmentState> blends;
+
+  VkExtent2D extent;
 
   DescriptorSetLayout desc_set_layout;
+  RenderPass pass;
 
   VkPipeline pipe;
   VkPipelineLayout pipe_layout;
 
-  VkRenderPass pass;
-  VkFramebuffer framebuf;
-  const ImageView* attach;
-
   std::optional<DescriptorSet> desc_set() noexcept;
+  std::optional<Framebuffer> framebuf(
+    L_STATIC Span<const ImageView*> attaches,
+    VkExtent2D extent, uint32_t nlayer) noexcept;
 };
+
+
 
 struct ComputePipeline {
   const Context* ctxt;
@@ -160,15 +183,15 @@ struct PipelineManager {
   std::list<ComputePipeline> comp_pipes;
 
   const GraphicsPipeline& declare_graph_pipe(const char* name,
+    VkExtent2D extent,
     L_STATIC Span<ShaderStage> stages,
     L_STATIC Span<VkPushConstantRange> push_const_rngs,
     L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-    L_STATIC Span<VkVertexInputBindingDescription> in_binds,
-    L_STATIC Span<VkVertexInputAttributeDescription> in_attrs,
-    L_STATIC Span<VkPipelineColorBlendAttachmentState> out_blends,
-    L_STATIC Span<VkAttachmentDescription> out_attach_descs,
-    L_STATIC Span<VkAttachmentReference> out_attach_refs,
-    const ImageView& attachment) noexcept;
+    L_STATIC Span<VkAttachmentDescription> attach_descs,
+    L_STATIC Span<VkAttachmentReference> attach_refs,
+    L_STATIC Span<VkVertexInputBindingDescription> vert_binds,
+    L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs,
+    L_STATIC Span<VkPipelineColorBlendAttachmentState> blends) noexcept;
   const ComputePipeline& declare_comp_pipe(const char* name,
     const ShaderStage* stage,
     L_STATIC Span<VkPushConstantRange> push_const_rngs,

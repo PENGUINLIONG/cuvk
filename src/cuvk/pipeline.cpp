@@ -69,43 +69,18 @@ ShaderManager::ShaderManager(ShaderManager&& right) :
 
 
 
-DescriptorSet& DescriptorSet::write(
-  uint32_t bind_pt, const BufferSlice& buf_slice,
-  VkDescriptorType desc_type) noexcept {
-  VkDescriptorBufferInfo dbi {
-    buf_slice.buf_alloc->buf, buf_slice.offset, buf_slice.size
-  };
-  VkWriteDescriptorSet wds {
-    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-    desc_set, bind_pt, 0,
-    1, desc_type,
-    nullptr, &dbi, nullptr,
-  };
-  vkUpdateDescriptorSets(ctxt->dev, 1, &wds, 0, nullptr);
-  return *this;
-}
-DescriptorSet& DescriptorSet::write(
-  uint32_t bind_pt, const ImageView& img_view, VkImageLayout layout,
-  VkDescriptorType desc_type) noexcept {
-  VkDescriptorImageInfo dii {
-    VK_NULL_HANDLE, // TODO: (penguinliong) Use sampler.
-    img_view.img_view,
-    layout,
-  };
-  VkWriteDescriptorSet wds {
-    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
-    desc_set, bind_pt, 0,
-    1, desc_type,
-    &dii, nullptr, nullptr,
-  };
-  vkUpdateDescriptorSets(ctxt->dev, 1, &wds, 0, nullptr);
-  return *this;
-}
-
-
-
 std::optional<DescriptorSet> GraphicsPipeline::desc_set() noexcept {
-  DescriptorSet rv(*ctxt, *this);
+  DescriptorSet rv(*ctxt, desc_set_layout);
+  if (rv.make()) {
+    return rv;
+  } else {
+    return {};
+  }
+}
+std::optional<Framebuffer> GraphicsPipeline::framebuf(
+  L_STATIC Span<const ImageView*> attaches,
+  VkExtent2D extent, uint32_t nlayer) noexcept {
+  Framebuffer rv(*ctxt, pass, attaches, extent, nlayer);
   if (rv.make()) {
     return rv;
   } else {
@@ -114,7 +89,7 @@ std::optional<DescriptorSet> GraphicsPipeline::desc_set() noexcept {
 }
 
 std::optional<DescriptorSet> ComputePipeline::desc_set() noexcept {
-  DescriptorSet rv(*ctxt, *this);
+  DescriptorSet rv(*ctxt, desc_set_layout);
   if (rv.make()) {
     return rv;
   } else {
@@ -126,15 +101,15 @@ std::optional<DescriptorSet> ComputePipeline::desc_set() noexcept {
 
 const GraphicsPipeline& PipelineManager::declare_graph_pipe(
   const char* name,
+  VkExtent2D extent,
   L_STATIC Span<ShaderStage> stages,
   L_STATIC Span<VkPushConstantRange> push_const_rngs,
   L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-  L_STATIC Span<VkVertexInputBindingDescription> in_binds,
-  L_STATIC Span<VkVertexInputAttributeDescription> in_attrs,
-  L_STATIC Span<VkPipelineColorBlendAttachmentState> out_blends,
-  L_STATIC Span<VkAttachmentDescription> out_attach_descs,
-  L_STATIC Span<VkAttachmentReference> out_attach_refs,
-  const ImageView& attach) noexcept {
+  L_STATIC Span<VkAttachmentDescription> attach_descs,
+  L_STATIC Span<VkAttachmentReference> attach_refs,
+  L_STATIC Span<VkVertexInputBindingDescription> vert_binds,
+  L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs,
+  L_STATIC Span<VkPipelineColorBlendAttachmentState> blends) noexcept {
   if (stages.size() > MAX_GRAPH_PIPE_STAGE_COUNT) {
     LOG.error("graphics pipeline must not have more than 5 stages");
     std::terminate();
@@ -143,12 +118,11 @@ const GraphicsPipeline& PipelineManager::declare_graph_pipe(
     ctxt,
     name,
     stages, push_const_rngs,
-    { in_binds, in_attrs, out_blends, out_attach_descs,
-      out_attach_refs },
+    vert_binds, vert_attrs, blends,
+    extent,
     { layout_binds },
+    { attach_descs, attach_refs },
     VK_NULL_HANDLE, VK_NULL_HANDLE,
-    VK_NULL_HANDLE, VK_NULL_HANDLE,
-    &attach,
   };
 
   return graph_pipes.emplace_back(std::move(pipe));
@@ -250,57 +224,32 @@ bool PipelineManager::make_graph_pipes() noexcept {
     }
 
     /* Render pass. */ {
-      auto& attach_refs = pipe.graph_io_req.out_attach_refs;
-
       VkSubpassDescription sd {};
       sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-      sd.colorAttachmentCount = static_cast<uint32_t>(attach_refs.size());
-      sd.pColorAttachments = attach_refs.data();
-
-      auto& attach_descs = pipe.graph_io_req.out_attach_descs;
+      sd.colorAttachmentCount = (uint32_t)pipe.pass.attach_refs.size();
+      sd.pColorAttachments = pipe.pass.attach_refs.data();
 
       VkRenderPassCreateInfo rpci {};
       rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-      rpci.attachmentCount = static_cast<uint32_t>(attach_descs.size());
-      rpci.pAttachments = attach_descs.data();
+      rpci.attachmentCount = (uint32_t)pipe.pass.attach_descs.size();
+      rpci.pAttachments = pipe.pass.attach_descs.data();
       rpci.subpassCount = 1;
       rpci.pSubpasses = &sd;
 
-      if (L_VK <- vkCreateRenderPass(ctxt->dev, &rpci, nullptr, &pipe.pass)) {
+      if (L_VK <- vkCreateRenderPass(ctxt->dev,
+        &rpci, nullptr, &pipe.pass.pass)) {
         LOG.error("unable to create render pass for graphics pipeline '{}'",
           pipe.name);
         return false;
       }
     }
 
-    /* Framebuffer. */ {
-      // TODO: (penguinliong) Support multi attachments. Check with the input of
-      // render pass creation.
-      auto img_view = pipe.attach->img_view;
-      VkFramebufferCreateInfo fci {};
-      fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-      fci.renderPass = pipe.pass;
-      fci.attachmentCount = 1;
-      fci.pAttachments = &img_view;
-      fci.width = pipe.attach->img_slice.img_alloc->req.extent.width;
-      fci.height = pipe.attach->img_slice.img_alloc->req.extent.height;
-      fci.layers = pipe.attach->img_slice.nlayer.value_or(1);
-
-      if (L_VK <- vkCreateFramebuffer(ctxt->dev, &fci, nullptr, &pipe.framebuf)) {
-        LOG.error("unable to create framebuffer");
-        return false;
-      }
-    }
-
-    auto& vibds = pipe.graph_io_req.in_binds;
-    auto& viads = pipe.graph_io_req.in_attrs;
-
     VkPipelineVertexInputStateCreateInfo pvisci{};
     pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    pvisci.vertexAttributeDescriptionCount = (uint32_t)viads.size();
-    pvisci.pVertexAttributeDescriptions = viads.data();
-    pvisci.vertexBindingDescriptionCount = (uint32_t)vibds.size();
-    pvisci.pVertexBindingDescriptions = vibds.data();
+    pvisci.vertexAttributeDescriptionCount = (uint32_t)pipe.vert_attrs.size();
+    pvisci.pVertexAttributeDescriptions = pipe.vert_attrs.data();
+    pvisci.vertexBindingDescriptionCount = (uint32_t)pipe.vert_binds.size();
+    pvisci.pVertexBindingDescriptions = pipe.vert_binds.data();
 
     // Input assembly.
     VkPipelineInputAssemblyStateCreateInfo piasci{};
@@ -311,12 +260,9 @@ bool PipelineManager::make_graph_pipes() noexcept {
     // Viewport info is update on each draw. We can ignore the viewport info as
     // we have dynamic viewport state.
     VkViewport viewport {
-      0, 0,
-      static_cast<float>(pipe.attach->img_slice.img_alloc->req.extent.width),
-      static_cast<float>(pipe.attach->img_slice.img_alloc->req.extent.height),
-      0.0, 0.0,
+      0, 0, (float)pipe.extent.width, (float)pipe.extent.height, 0.0, 0.0,
     };
-    VkRect2D scissor { { 0, 0 }, pipe.attach->img_slice.img_alloc->req.extent };
+    VkRect2D scissor { { 0, 0 }, pipe.extent };
 
     VkPipelineViewportStateCreateInfo pvsci{};
     pvsci.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -339,13 +285,12 @@ bool PipelineManager::make_graph_pipes() noexcept {
     pmsci.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     pmsci.minSampleShading = 1.0;
 
-    // Blending which we don't need.
-    auto& blends = pipe.graph_io_req.out_blends;
+    // Blending which we don't need (currently?).;
     VkPipelineColorBlendStateCreateInfo pcbsci{};
     pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     pcbsci.blendConstants[0] = 1.0;
-    pcbsci.attachmentCount = static_cast<uint32_t>(blends.size());
-    pcbsci.pAttachments = blends.data();
+    pcbsci.attachmentCount = (uint32_t)pipe.blends.size();
+    pcbsci.pAttachments = pipe.blends.data();
 
     uint32_t nstage = 0;
     std::array<VkPipelineShaderStageCreateInfo, 5> psscis{};
@@ -365,7 +310,7 @@ bool PipelineManager::make_graph_pipes() noexcept {
     gpci.pRasterizationState = &prsci;
     gpci.pMultisampleState = &pmsci;
     gpci.pColorBlendState = &pcbsci;
-    gpci.renderPass = pipe.pass;
+    gpci.renderPass = pipe.pass.pass;
     gpci.subpass = 0;
 
     // TODO: (penguinliong) Do we need to use cache?
@@ -445,9 +390,9 @@ void PipelineManager::drop_graph_pipes() noexcept {
       vkDestroyPipeline(ctxt->dev, pipe.pipe, nullptr);
       pipe.pipe = VK_NULL_HANDLE;
     }
-    if (pipe.pass) {
-      vkDestroyRenderPass(ctxt->dev, pipe.pass, nullptr);
-      pipe.pass = VK_NULL_HANDLE;
+    if (pipe.pass.pass) {
+      vkDestroyRenderPass(ctxt->dev, pipe.pass.pass, nullptr);
+      pipe.pass.pass = VK_NULL_HANDLE;
     }
     if (pipe.pipe_layout) {
       vkDestroyPipelineLayout(ctxt->dev, pipe.pipe_layout, nullptr);
@@ -490,16 +435,9 @@ void PipelineManager::drop_comp_pipes() noexcept {
 
 DescriptorSet::DescriptorSet(
   const Context& ctxt,
-  const GraphicsPipeline& pipe) noexcept :
+  const DescriptorSetLayout& desc_set_layout) noexcept :
   ctxt(&ctxt),
-  desc_set_layout(&pipe.desc_set_layout),
-  desc_pool(),
-  desc_set() {}
-DescriptorSet::DescriptorSet(
-  const Context& ctxt,
-  const ComputePipeline& pipe) noexcept :
-  ctxt(&ctxt),
-  desc_set_layout(&pipe.desc_set_layout),
+  desc_set_layout(&desc_set_layout),
   desc_pool(),
   desc_set() {}
 
@@ -543,5 +481,87 @@ DescriptorSet::DescriptorSet(DescriptorSet&& right) noexcept :
   desc_set_layout(right.desc_set_layout),
   desc_pool(right.desc_pool),
   desc_set(right.desc_set) {}
+
+DescriptorSet& DescriptorSet::write(
+  uint32_t bind_pt, const BufferSlice& buf_slice,
+  VkDescriptorType desc_type) noexcept {
+  VkDescriptorBufferInfo dbi {
+    buf_slice.buf_alloc->buf, buf_slice.offset, buf_slice.size
+  };
+  VkWriteDescriptorSet wds {
+    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+    desc_set, bind_pt, 0,
+    1, desc_type,
+    nullptr, &dbi, nullptr,
+  };
+  vkUpdateDescriptorSets(ctxt->dev, 1, &wds, 0, nullptr);
+  return *this;
+}
+DescriptorSet& DescriptorSet::write(
+  uint32_t bind_pt, const ImageView& img_view, VkImageLayout layout,
+  VkDescriptorType desc_type) noexcept {
+  VkDescriptorImageInfo dii {
+    VK_NULL_HANDLE, // TODO: (penguinliong) Use sampler.
+    img_view.img_view,
+    layout,
+  };
+  VkWriteDescriptorSet wds {
+    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
+    desc_set, bind_pt, 0,
+    1, desc_type,
+    &dii, nullptr, nullptr,
+  };
+  vkUpdateDescriptorSets(ctxt->dev, 1, &wds, 0, nullptr);
+  return *this;
+}
+
+
+
+Framebuffer::Framebuffer(
+  const Context& ctxt, const RenderPass& pass,
+  L_STATIC Span<const ImageView*> attaches,
+  VkExtent2D extent, uint32_t nlayer) noexcept :
+  ctxt(&ctxt),
+  req({ attaches, extent, nlayer }),
+  framebuf(VK_NULL_HANDLE) {}
+bool Framebuffer::make() noexcept {
+  // Collect lazy allocated image views.
+  std::vector<VkImageView> img_views {};
+  for (auto& attach : req.attaches) {
+    img_views.emplace_back(attach->img_view);
+  }
+
+  VkFramebufferCreateInfo fci {};
+  // TODO: (penguinliong) Support multi attachments. Check with the input of
+  // render pass creation.
+  fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  fci.renderPass = pass->pass;
+  fci.attachmentCount = (uint32_t)img_views.size();
+  fci.pAttachments = img_views.data();
+  fci.width = req.extent.width;
+  fci.height = req.extent.height;
+  fci.layers = req.nlayer;
+
+  if (L_VK <- vkCreateFramebuffer(ctxt->dev, &fci, nullptr, &framebuf)) {
+    LOG.error("unable to create framebuffer");
+    return false;
+  }
+  return true;
+}
+void Framebuffer::drop() noexcept {
+  if (framebuf) {
+    vkDestroyFramebuffer(ctxt->dev, framebuf, nullptr);
+    framebuf = VK_NULL_HANDLE;
+  }
+}
+Framebuffer::~Framebuffer() noexcept {
+  drop();
+}
+
+Framebuffer::Framebuffer(Framebuffer&& rv) noexcept :
+  ctxt(rv.ctxt),
+  pass(rv.pass),
+  req(rv.req),
+  framebuf(std::exchange(rv.framebuf, VK_NULL_HANDLE)) {}
 
 L_CUVK_END_
