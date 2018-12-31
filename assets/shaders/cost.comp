@@ -2,7 +2,6 @@
 // Cost Computation Shader Program (1/1)
 // -------------------------------------
 // Compute the cost of each universe.
-// TODO (penguinliong): Use buffer texture later.
 //L
 #version 450
 precision mediump float;
@@ -14,7 +13,8 @@ precision mediump float;
 // ----------
 //  When jobs are dispatched to this shader, the workgroup sizes should be
 //  specified as the following:
-//    x = universe ID.
+//    x = universe ID;
+//    y = section ID, for each section in a universe.
 // in uvec3 gl_GlobalInvocationID;
 //L
 
@@ -24,14 +24,15 @@ precision mediump float;
 // Local Invocation
 // ----------------
 //  These values are specialized at runtime.
-//    HALF of the width of universes;
 layout(local_size_x=1, local_size_x_id=1) in;
-//    HALF of the height of universes.
 layout(local_size_y=1, local_size_y_id=2) in;
-//    Reserved.
 layout(local_size_z=1, local_size_z_id=3) in;
 // Constant ID are started from 1 because some Nvidia driver have problem
 // starting from 0.
+//
+//  The index of local invocation is the index of each group of 4 pixels in a
+//  row.
+// in uint gl_LocalInvocationIndex;
 //L
 
 
@@ -39,85 +40,86 @@ layout(local_size_z=1, local_size_z_id=3) in;
 //
 // Inputs
 // ------
-//  Real universe. Must have width and height powers of 2.
-layout(r32f, binding=0) readonly
-uniform image2D real_univ;
+//  Real universe. Must have length of `NQUATER_PIXEL`.
+layout(std430, binding=0) readonly
+buffer real_univ_buf {
+  vec4[] real_univ;
+};
 //  Simulated universes. Must have the same widths and heights as the real
-//  universe.
-layout(r32f, binding=1) readonly
-uniform image2DArray sim_univs;
+//  universe. Should have length of `(NUNIV * NQUATER_PIXEL)`.
+layout(std430, binding=1) readonly
+buffer sim_univs_buf {
+  vec4[] sim_univs;
+};
 //  Temporary shared buffer for sum calculation. Should have length of
-//  `(UNIV_WIDTH * UNIV_HEIGHT * NUNIV / 4)`.
+//  `NPACK`.
 layout(std430, binding=2) coherent
 buffer sum_temp_buf {
   float[] sum_temp;
 };
 //L
 
+
+
 //
 // Output
 // ------
-//  Costs. Must have length `NUNIV`.
+//  Collection of cost calculated in each workgroup. Must have length
+//  `NUNIV * NSEC` (no residual) or `NUNIV * (NSEC + 1)` (with residual).
 layout(std430, binding=3)
-buffer costs_buf {
-  float[] costs;
+buffer partial_costs_buf {
+  float[] partial_costs;
 };
 //L
+
 
 
 //
 // Push Constants
 // --------------
-layout(std430, push_constant) uniform DeformMeta {
-  // Half extent of input universes, i.e. vec2(univ.width / 2, univ.height / 2).
-  ivec2 HALF_UNIV_EXTENT;
-  // The size in floats of a single input universe (layer).
-  int HALF_UNIV_SIZE;
+layout(std430, push_constant) uniform CostMeta {
+  // Number of sections in a universe.
+  uint NSEC_UNIV;
+  // Number of groups of 4 pixels in each section, the same as the number of
+  // local invocations;
+  uint NPACK_SEC;
+  // Number of groups of 4 pixels in each universe;
+  uint NPACK_UNIV;
+  // Offset from the beginning of each universe, in unit of section.
+  uint SEC_OFFSET;
 };
+//L
 
 
 
-float block_diff(ivec2 pos, int univ) {
-  int x = pos.x;
-  int y = pos.y;
-  vec4 real_val = vec4(
-    imageLoad(real_univ, ivec2(x    , y    )).x,
-    imageLoad(real_univ, ivec2(x + 1, y    )).x,
-    imageLoad(real_univ, ivec2(x    , y + 1)).x,
-    imageLoad(real_univ, ivec2(x + 1, y + 1)).x);
-  vec4 sim_val = vec4(
-    imageLoad(sim_univs, ivec3(x    , y    , univ)).x,
-    imageLoad(sim_univs, ivec3(x + 1, y    , univ)).x,
-    imageLoad(sim_univs, ivec3(x    , y + 1, univ)).x,
-    imageLoad(sim_univs, ivec3(x + 1, y + 1, univ)).x);
-  vec4 diff = abs(real_val - sim_val);
-  diff.xy += diff.zw;
-  return diff.x + diff.y;
-}
 
 void main() {
-  int x = int(gl_LocalInvocationID.x);
-  int y = int(gl_LocalInvocationID.y);
-  // NOT THIS: int univ = int(gl_GlobalInvocationID.x);
-  int univ = int(gl_WorkGroupID.x);
+  uint univ = gl_WorkGroupID.x;
+  uint section = gl_WorkGroupID.y;
+  uint pack_pos = gl_LocalInvocationIndex;
+  uint sec_offset = SEC_OFFSET + section;
 
-  int univ_offset = univ * HALF_UNIV_SIZE;
-  int pos_offset = y * HALF_UNIV_EXTENT.x + x;
-  int offset = univ_offset + pos_offset;
+  uint univ_pack_offset = univ * NPACK_UNIV;
+  uint sec_pack_offset = sec_offset * NPACK_SEC;
+  uint real_pack_offset = sec_pack_offset + pack_pos;
+  uint sim_pack_offset = univ_pack_offset + real_pack_offset;
+  uint output_offset = univ * NSEC_UNIV + sec_offset;
 
   // Sum up first step for all universes. Fill `sum_temp` with partial sums.
-  sum_temp[offset] = block_diff(ivec2(x << 1, y << 1), univ);
+  vec4 diff4 = abs(real_univ[real_pack_offset] - sim_univs[sim_pack_offset]);
+  vec2 diff2 = diff4.xy + diff4.zw;
+  sum_temp[sim_pack_offset] = diff2.x + diff2.y;
   memoryBarrier();
   barrier();
 
   // Now `sum_temp` is filled with values. Its size for each universe remainder
-  // is `HALF_UNIS_SIZE`.
-  for (int s = int(HALF_UNIV_SIZE); s > 1;) {
-    int half_s = s >> 1;
+  // is `NPACK_SEC`.
+  for (uint s = NPACK_SEC; s > 1;) {
+    uint half_s = s >> 1;
     // Keep the one in middle when `s` is an odd number.
-    int adjusted_half_s = half_s + (s & 1);
-    if (pos_offset < half_s) {
-      sum_temp[offset] += sum_temp[offset + adjusted_half_s];
+    uint adjusted_half_s = half_s + (s & 1);
+    if (pack_pos < half_s) {
+      sum_temp[sim_pack_offset] += sum_temp[sim_pack_offset + adjusted_half_s];
       s = adjusted_half_s;
       memoryBarrier();
       barrier();
@@ -126,5 +128,6 @@ void main() {
     }
   }
 
-  costs[univ] = sum_temp[univ_offset];
+  partial_costs[output_offset] = sum_temp[sim_pack_offset];
+  return;
 }

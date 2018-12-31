@@ -71,11 +71,12 @@ layout(std430, push_constant) uniform EvalMeta {
 
 
 vec4 calc_pos(mat2 rotate, vec2 orig, vec2 offset) {
-  return vec4(rotate * orig + offset, 0.0, 1.0);
+  return vec4((rotate * orig) + offset, 0.0, 1.0);
 }
 
 void main() {
   Bacterium bac = bacs[0];
+  int layer = int(bac.univ - BASE_UNIV);
   float len = bac.size.x;
   float r = bac.size.y;
   float trig_45_r = 0.70710678118654752440084436210485 * r;
@@ -87,52 +88,52 @@ void main() {
 
 
   // Right of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(len + r, 0.0), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(len + trig_45_r, -trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right top of the cylindrical part.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(len, r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Right bottom of the cylindrical part.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(len, -r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the cylindrical part.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(-len, r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the cylindrical part.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(-len, -r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left top of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left bottom of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(-len - trig_45_r, -trig_45_r), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();
   // Left of the round tip.
-  gl_Layer = int(bac.univ - BASE_UNIV);
+  gl_Layer = layer;
   gl_Position = calc_pos(rotate, vec2(-len - r, 0.0), pos);
   gl_PrimitiveID = gl_PrimitiveIDIn;
   EmitVertex();

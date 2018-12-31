@@ -1,14 +1,41 @@
 #pragma once
 #include "cuvk/comdef.hpp"
 #include "cuvk/span.hpp"
-#include <vector>
 
 L_CUVK_BEGIN_
 
-extern struct Context;
-extern struct ImageView;
+struct Shader;
+struct ShaderStage;
+
+struct ShaderManager;
+
+struct DescriptorSetLayout;
+struct DecsriptorSet;
+
+struct RenderPass;
+struct FramebufferRequirements;
+struct Framebuffer;
+
+struct PipelineRequirements;
+struct GraphicsPipelineRequirements;
+struct GraphicsPipeline;
+struct ComputePipelineRequirements;
+struct ComputePipeline;
+struct PipelineManager;
 
 
+
+
+
+
+
+
+
+
+// External dependency.
+struct Context;
+struct BufferSlice;
+struct ImageView;
 
 struct ShaderStage {
   const Shader* shader;
@@ -59,7 +86,6 @@ struct ShaderManager {
 
 
 struct DescriptorSetLayout {
-  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds;
   std::vector<VkDescriptorPoolSize> desc_pool_sizes;
 
   VkDescriptorSetLayout desc_set_layout;
@@ -93,9 +119,6 @@ struct DescriptorSet {
 
 
 struct RenderPass {
-  L_STATIC Span<VkAttachmentDescription> attach_descs;
-  L_STATIC Span<VkAttachmentReference> attach_refs;
-
   VkRenderPass pass;
 };
 
@@ -129,20 +152,33 @@ struct Framebuffer {
 
 
 
+struct PipelineRequirements {
+  L_STATIC Span<ShaderStage> stages;
+  L_STATIC Span<VkPushConstantRange> push_const_rngs;
+  L_STATIC Span<VkDescriptorSetLayoutBinding> desc_layout_binds;
+};
+struct GraphicsPipelineRequirements {
+  L_STATIC Span<VkVertexInputBindingDescription> vert_binds;
+  L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs;
+  VkExtent2D viewport;
+  L_STATIC Span<VkAttachmentDescription> attach_descs;
+  L_STATIC Span<VkAttachmentReference> attach_refs;
+  L_STATIC Span<VkPipelineColorBlendAttachmentState> blends;
+};
+struct ComputePipelineRequirements {
+  std::optional<std::array<uint32_t, 3>> local_workgrp;
+};
+
+
+
 // TODO: (penguinliong) The current implementation only allow a single subpass.
 // See if multi-subpass is needed, or it just a non-goal.
 struct GraphicsPipeline {
   const Context* ctxt;
   const char* name;
 
-  L_STATIC Span<ShaderStage> stages;
-  L_STATIC Span<VkPushConstantRange> push_const_rngs;
-
-  L_STATIC Span<VkVertexInputBindingDescription> vert_binds;
-  L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs;
-  L_STATIC Span<VkPipelineColorBlendAttachmentState> blends;
-
-  VkExtent2D extent;
+  PipelineRequirements req;
+  GraphicsPipelineRequirements graph_req;
 
   DescriptorSetLayout desc_set_layout;
   RenderPass pass;
@@ -162,10 +198,9 @@ struct ComputePipeline {
   const Context* ctxt;
   const char* name;
 
-  L_STATIC const ShaderStage* stage;
-  L_STATIC Span<VkPushConstantRange> push_const_rngs;
+  PipelineRequirements req;
+  ComputePipelineRequirements comp_req;
 
-  std::optional<std::array<uint32_t, 3>> local_workgrp_size;
   DescriptorSetLayout desc_set_layout;
 
   VkPipeline pipe;
@@ -183,20 +218,11 @@ struct PipelineManager {
   std::list<ComputePipeline> comp_pipes;
 
   const GraphicsPipeline& declare_graph_pipe(const char* name,
-    VkExtent2D extent,
-    L_STATIC Span<ShaderStage> stages,
-    L_STATIC Span<VkPushConstantRange> push_const_rngs,
-    L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-    L_STATIC Span<VkAttachmentDescription> attach_descs,
-    L_STATIC Span<VkAttachmentReference> attach_refs,
-    L_STATIC Span<VkVertexInputBindingDescription> vert_binds,
-    L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs,
-    L_STATIC Span<VkPipelineColorBlendAttachmentState> blends) noexcept;
+    const PipelineRequirements& req,
+    const GraphicsPipelineRequirements& graph_req) noexcept;
   const ComputePipeline& declare_comp_pipe(const char* name,
-    const ShaderStage* stage,
-    L_STATIC Span<VkPushConstantRange> push_const_rngs,
-    L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-    std::optional<std::array<uint32_t, 3>> local_workgrp) noexcept;
+    const PipelineRequirements& req,
+    const ComputePipelineRequirements& comp_req) noexcept;
 
   PipelineManager(const Context& ctxt) noexcept;
   bool make() noexcept;
@@ -209,9 +235,7 @@ struct PipelineManager {
   PipelineManager(PipelineManager&&) noexcept;
 
 private:
-  bool make_layouts(
-    L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-    L_STATIC Span<VkPushConstantRange> push_const_rngs,
+  bool make_layouts(const PipelineRequirements& req,
     L_OUT VkDescriptorSetLayout& desc_set_layout,
     L_OUT VkPipelineLayout& pipe_layout) noexcept;
   bool make_graph_pipes() noexcept;

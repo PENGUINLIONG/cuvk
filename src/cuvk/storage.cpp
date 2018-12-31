@@ -67,11 +67,6 @@ inline uint32_t get_pixel_size(VkFormat fmt) noexcept {
   std::terminate();
 }
 
-constexpr VkDeviceSize align_size(
-  VkDeviceSize size, VkDeviceSize alignment) noexcept {
-  return (size + alignment - 1) / alignment * alignment;
-}
-
 
 
 bool DeviceMemorySlice::send(const void* data, size_t size) const noexcept {
@@ -106,7 +101,7 @@ void* DeviceMemorySlice::map(size_t size) const noexcept {
     .limits.minMemoryMapAlignment;
   auto map_offset = offset / alignment * alignment;
   auto partial_offset = offset - map_offset;
-  auto map_size = align_size(partial_offset + size, alignment);
+  auto map_size = detail::align(partial_offset + size, alignment);
 
   void* dev_data;
   if (L_VK <- vkMapMemory(
@@ -128,6 +123,12 @@ DeviceMemorySlice BufferSlice::dev_mem_view() const noexcept {
     buf_alloc->heap_alloc,
     buf_alloc->offset + offset,
     size
+  };
+}
+BufferSlice BufferSlice::slice(
+  VkDeviceSize offset, VkDeviceSize size) const noexcept {
+  return {
+    buf_alloc, this->offset + offset, size
   };
 }
 
@@ -270,18 +271,40 @@ BufferSlice BufferAllocation::slice(
   VkDeviceSize offset, VkDeviceSize size) const noexcept {
   return { this, offset, size };
 }
+BufferSlice BufferAllocation::slice(RawBufferSlice slice) const noexcept {
+  return { this, slice.offset, slice.size };
+}
 BufferView BufferAllocation::view(
   VkDeviceSize offset, VkDeviceSize size, VkFormat format) const noexcept {
   return { slice(offset, size), format };
+}
+BufferView BufferAllocation::view(
+  RawBufferSlice slice, VkFormat format) const noexcept {
+  return { this->slice(slice), format };
 }
 
 ImageSlice ImageAllocation::slice(
   uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept {
   return { this, base_layer, nlayer };
 }
+ImageSlice ImageAllocation::slice(
+  RawImageSlice raw_slice, bool is_array) const noexcept {
+  if (is_array) {
+    return { this, raw_slice.offset, raw_slice.size };
+  } else {
+    if (raw_slice.size > 1) {
+      LOG.error("Non-array image slice cannot have multiple layers");
+    }
+    return { this, raw_slice.offset, std::make_optional<uint32_t>() };
+  }
+}
 ImageView ImageAllocation::view(
   uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept {
   return { slice(base_layer, nlayer) };
+}
+ImageView ImageAllocation::view(
+  RawImageSlice raw_slice, bool is_array) const noexcept {
+  return { slice(raw_slice, is_array) };
 }
 
 
@@ -444,7 +467,7 @@ bool HeapManager::make_bufs() noexcept  {
     }
 
     auto& alloc_size = alloc->second.alloc_size;
-    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    auto offset_aligned = detail::align(alloc_size, mem_req.alignment);
     buf_alloc.offset = offset_aligned;
     buf_alloc.heap_alloc = &alloc->second;
     alloc_size = offset_aligned + mem_req.size;
@@ -485,7 +508,7 @@ bool HeapManager::make_imgs() noexcept {
     }
 
     auto& alloc_size = alloc->second.alloc_size;
-    auto offset_aligned = align_size(alloc_size, mem_req.alignment);
+    auto offset_aligned = detail::align(alloc_size, mem_req.alignment);
     img_alloc.offset = offset_aligned;
     img_alloc.heap_alloc = &alloc->second;
     alloc_size = offset_aligned + mem_req.size;
@@ -500,8 +523,16 @@ bool HeapManager::alloc_mem() noexcept {
     if (heap_alloc.alloc_size > 0) {
       VkMemoryAllocateInfo mai {};
       mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-      mai.allocationSize = heap_alloc.alloc_size;
       mai.memoryTypeIndex = pair.first;
+      // Ensure host-visible memories are aligned to be mappable.
+      if (mem_types[pair.first].propertyFlags &
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+        auto& limits = ctxt->req.phys_dev_info->phys_dev_props.limits;
+        mai.allocationSize = detail::align(
+          heap_alloc.alloc_size, limits.minMemoryMapAlignment);
+      } else {
+        mai.allocationSize = heap_alloc.alloc_size;
+      }
 
       VkDeviceMemory dev_mem;
       if (L_VK <- vkAllocateMemory(ctxt->dev, &mai, nullptr, &dev_mem)) {

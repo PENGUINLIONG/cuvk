@@ -97,6 +97,6 @@ void main() {
   bac.pos += spec.translate;
   bac.size *= spec.stretch;
   bac.orient += spec.rotate;
-  bac.univ += BASE_UNIV + deform_idx * NUNIV;
-  bacs_out[bac_idx + deform_idx * NBAC] = bac;
+  bac.univ += (deform_idx * NUNIV) + BASE_UNIV;
+  bacs_out[(deform_idx * NBAC) + bac_idx] = bac;
 }

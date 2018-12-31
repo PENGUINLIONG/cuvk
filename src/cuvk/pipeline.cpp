@@ -99,49 +99,64 @@ std::optional<DescriptorSet> ComputePipeline::desc_set() noexcept {
 
 
 
-const GraphicsPipeline& PipelineManager::declare_graph_pipe(
-  const char* name,
-  VkExtent2D extent,
-  L_STATIC Span<ShaderStage> stages,
-  L_STATIC Span<VkPushConstantRange> push_const_rngs,
-  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-  L_STATIC Span<VkAttachmentDescription> attach_descs,
-  L_STATIC Span<VkAttachmentReference> attach_refs,
-  L_STATIC Span<VkVertexInputBindingDescription> vert_binds,
-  L_STATIC Span<VkVertexInputAttributeDescription> vert_attrs,
-  L_STATIC Span<VkPipelineColorBlendAttachmentState> blends) noexcept {
-  if (stages.size() > MAX_GRAPH_PIPE_STAGE_COUNT) {
+std::vector<VkDescriptorPoolSize> make_desc_pool_sizes(
+  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds) {
+  // Collect the number of each type of descriptors.
+  std::map<VkDescriptorType, uint32_t> desc_count_map;
+  for (const auto& bind : layout_binds) {
+    auto it = desc_count_map.find(bind.descriptorType);
+    if (it == desc_count_map.end()) {
+      desc_count_map.emplace(
+        std::make_pair(bind.descriptorType, bind.descriptorCount));
+    } else {
+      it->second += bind.descriptorCount;
+    }
+  }
+  std::vector<VkDescriptorPoolSize> dpss;
+  dpss.reserve(desc_count_map.size());
+  for (const auto& pair : desc_count_map) {
+    dpss.emplace_back(VkDescriptorPoolSize{ pair.first, pair.second });
+  }
+  return std::move(dpss);
+}
+const GraphicsPipeline& PipelineManager::declare_graph_pipe(const char* name,
+  const PipelineRequirements& req,
+  const GraphicsPipelineRequirements& graph_req) noexcept {
+  if (req.stages.size() > MAX_GRAPH_PIPE_STAGE_COUNT) {
     LOG.error("graphics pipeline must not have more than 5 stages");
     std::terminate();
   }
+  if (req.stages.size() == 0) {
+    LOG.error("graphics pipeline must have at least 1 stage");
+  }
+  DescriptorSetLayout desc_set_layout {
+    make_desc_pool_sizes(req.desc_layout_binds),
+    VK_NULL_HANDLE,
+  };
+  RenderPass pass { VK_NULL_HANDLE };
   GraphicsPipeline pipe {
-    ctxt,
-    name,
-    stages, push_const_rngs,
-    vert_binds, vert_attrs, blends,
-    extent,
-    { layout_binds },
-    { attach_descs, attach_refs },
+    ctxt, name, req, graph_req,
+    std::move(desc_set_layout), std::move(pass),
     VK_NULL_HANDLE, VK_NULL_HANDLE,
   };
 
   return graph_pipes.emplace_back(std::move(pipe));
 }
-const ComputePipeline& PipelineManager::declare_comp_pipe(
-  const char* name,
-  const ShaderStage* stage,
-  L_STATIC Span<VkPushConstantRange> push_const_rngs,
-  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-  std::optional<std::array<uint32_t, 3>> local_workgrp_size) noexcept {
+const ComputePipeline& PipelineManager::declare_comp_pipe(const char* name,
+  const PipelineRequirements& req,
+  const ComputePipelineRequirements& comp_req) noexcept {
+  if (req.stages.size() == 0) {
+    LOG.error("compute pipeline must have at least 1 stage");
+  }
+  DescriptorSetLayout desc_set_layout {
+    make_desc_pool_sizes(req.desc_layout_binds),
+    VK_NULL_HANDLE,
+  };
   ComputePipeline pipe {
-    ctxt,
-    name,
-    stage, push_const_rngs,
-    local_workgrp_size,
-    {},
+    ctxt, name, req, comp_req,
+    std::move(desc_set_layout),
     VK_NULL_HANDLE, VK_NULL_HANDLE
   };
-  pipe.desc_set_layout.layout_binds = std::move(layout_binds);
 
   return comp_pipes.emplace_back(std::move(pipe));
 }
@@ -164,16 +179,14 @@ PipelineManager::PipelineManager(PipelineManager&& right) noexcept :
   graph_pipes(std::move(right.graph_pipes), {}),
   comp_pipes(std::move(right.comp_pipes), {}) {}
 
-bool PipelineManager::make_layouts(
-  L_STATIC Span<VkDescriptorSetLayoutBinding> layout_binds,
-  L_STATIC Span<VkPushConstantRange> push_const_rngs,
+bool PipelineManager::make_layouts(const PipelineRequirements& req,
   L_OUT VkDescriptorSetLayout& desc_set_layout,
   L_OUT VkPipelineLayout& pipe_layout) noexcept {
 
   VkDescriptorSetLayoutCreateInfo dslci{};
   dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  dslci.pBindings = layout_binds.data();
-  dslci.bindingCount = static_cast<uint32_t>(layout_binds.size());
+  dslci.pBindings = req.desc_layout_binds.data();
+  dslci.bindingCount = (uint32_t)req.desc_layout_binds.size();
 
   if (L_VK <- vkCreateDescriptorSetLayout(
       ctxt->dev, &dslci, nullptr, &desc_set_layout)) {
@@ -185,8 +198,8 @@ bool PipelineManager::make_layouts(
   plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   plci.setLayoutCount = 1;
   plci.pSetLayouts = &desc_set_layout;
-  plci.pushConstantRangeCount = static_cast<uint32_t>(push_const_rngs.size());
-  plci.pPushConstantRanges = push_const_rngs.data();
+  plci.pushConstantRangeCount = (uint32_t)req.push_const_rngs.size();
+  plci.pPushConstantRanges = req.push_const_rngs.data();
 
   if (L_VK <- vkCreatePipelineLayout(ctxt->dev, &plci, nullptr, &pipe_layout)) {
     LOG.error("unable to create pipeline layout");
@@ -194,31 +207,10 @@ bool PipelineManager::make_layouts(
   }
   return true;
 }
-std::vector<VkDescriptorPoolSize> make_desc_pool_sizes(
-  Span<VkDescriptorSetLayoutBinding> layout_binds) {
-  // Collect the number of each type of descriptors.
-  std::map<VkDescriptorType, uint32_t> desc_count_map;
-  for (const auto& bind : layout_binds) {
-    auto it = desc_count_map.find(bind.descriptorType);
-    if (it == desc_count_map.end()) {
-      desc_count_map.emplace(
-        std::make_pair(bind.descriptorType, bind.descriptorCount));
-    } else {
-      it->second += bind.descriptorCount;
-    }
-  }
-  std::vector<VkDescriptorPoolSize> dpss;
-  dpss.reserve(desc_count_map.size());
-  for (const auto& pair : desc_count_map) {
-    dpss.emplace_back(VkDescriptorPoolSize{ pair.first, pair.second });
-  }
-  return std::move(dpss);
-}
 bool PipelineManager::make_graph_pipes() noexcept {
   for (auto& pipe : graph_pipes) {
     if (pipe.pipe) { continue; }
-    if (!make_layouts(pipe.desc_set_layout.layout_binds, pipe.push_const_rngs,
-      pipe.desc_set_layout.desc_set_layout,
+    if (!make_layouts(pipe.req, pipe.desc_set_layout.desc_set_layout,
       pipe.pipe_layout)) {
       return false;
     }
@@ -226,13 +218,13 @@ bool PipelineManager::make_graph_pipes() noexcept {
     /* Render pass. */ {
       VkSubpassDescription sd {};
       sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-      sd.colorAttachmentCount = (uint32_t)pipe.pass.attach_refs.size();
-      sd.pColorAttachments = pipe.pass.attach_refs.data();
+      sd.colorAttachmentCount = (uint32_t)pipe.graph_req.attach_refs.size();
+      sd.pColorAttachments = pipe.graph_req.attach_refs.data();
 
       VkRenderPassCreateInfo rpci {};
       rpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-      rpci.attachmentCount = (uint32_t)pipe.pass.attach_descs.size();
-      rpci.pAttachments = pipe.pass.attach_descs.data();
+      rpci.attachmentCount = (uint32_t)pipe.graph_req.attach_descs.size();
+      rpci.pAttachments = pipe.graph_req.attach_descs.data();
       rpci.subpassCount = 1;
       rpci.pSubpasses = &sd;
 
@@ -246,10 +238,12 @@ bool PipelineManager::make_graph_pipes() noexcept {
 
     VkPipelineVertexInputStateCreateInfo pvisci{};
     pvisci.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    pvisci.vertexAttributeDescriptionCount = (uint32_t)pipe.vert_attrs.size();
-    pvisci.pVertexAttributeDescriptions = pipe.vert_attrs.data();
-    pvisci.vertexBindingDescriptionCount = (uint32_t)pipe.vert_binds.size();
-    pvisci.pVertexBindingDescriptions = pipe.vert_binds.data();
+    pvisci.vertexAttributeDescriptionCount =
+      (uint32_t)pipe.graph_req.vert_attrs.size();
+    pvisci.pVertexAttributeDescriptions = pipe.graph_req.vert_attrs.data();
+    pvisci.vertexBindingDescriptionCount =
+      (uint32_t)pipe.graph_req.vert_binds.size();
+    pvisci.pVertexBindingDescriptions = pipe.graph_req.vert_binds.data();
 
     // Input assembly.
     VkPipelineInputAssemblyStateCreateInfo piasci{};
@@ -260,9 +254,12 @@ bool PipelineManager::make_graph_pipes() noexcept {
     // Viewport info is update on each draw. We can ignore the viewport info as
     // we have dynamic viewport state.
     VkViewport viewport {
-      0, 0, (float)pipe.extent.width, (float)pipe.extent.height, 0.0, 0.0,
+      0, 0,
+      (float)pipe.graph_req.viewport.width,
+      (float)pipe.graph_req.viewport.height,
+      0.0, 0.0,
     };
-    VkRect2D scissor { { 0, 0 }, pipe.extent };
+    VkRect2D scissor { { 0, 0 }, pipe.graph_req.viewport };
 
     VkPipelineViewportStateCreateInfo pvsci{};
     pvsci.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
@@ -289,12 +286,12 @@ bool PipelineManager::make_graph_pipes() noexcept {
     VkPipelineColorBlendStateCreateInfo pcbsci{};
     pcbsci.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     pcbsci.blendConstants[0] = 1.0;
-    pcbsci.attachmentCount = (uint32_t)pipe.blends.size();
-    pcbsci.pAttachments = pipe.blends.data();
+    pcbsci.attachmentCount = (uint32_t)pipe.graph_req.blends.size();
+    pcbsci.pAttachments = pipe.graph_req.blends.data();
 
     uint32_t nstage = 0;
     std::array<VkPipelineShaderStageCreateInfo, 5> psscis{};
-    for (auto& stage : pipe.stages) {
+    for (auto& stage : pipe.req.stages) {
       psscis[nstage++] = stage;
     }
 
@@ -320,17 +317,14 @@ bool PipelineManager::make_graph_pipes() noexcept {
       return false;
     }
     LOG.info("created graphics pipeline '{}'", pipe.name);
-
-    pipe.desc_set_layout.desc_pool_sizes =
-      make_desc_pool_sizes(pipe.desc_set_layout.layout_binds);
   }
+
   return true;
 }
 bool PipelineManager::make_comp_pipes() noexcept {
   for (auto& pipe : comp_pipes) {
     if (pipe.pipe) { continue; }
-    if (!make_layouts(pipe.desc_set_layout.layout_binds, pipe.push_const_rngs,
-      pipe.desc_set_layout.desc_set_layout,
+    if (!make_layouts(pipe.req, pipe.desc_set_layout.desc_set_layout,
       pipe.pipe_layout)) {
       LOG.error("unable to create layouts for compute pipeline '{}'",
         pipe.name);
@@ -343,9 +337,9 @@ bool PipelineManager::make_comp_pipes() noexcept {
     VkComputePipelineCreateInfo cpci{};
     cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     cpci.layout = pipe.pipe_layout;
-    cpci.stage = *pipe.stage;
+    cpci.stage = pipe.req.stages[0];
 
-    if (pipe.local_workgrp_size.has_value()) {
+    if (pipe.comp_req.local_workgrp.has_value()) {
       smes[0].constantID = 1;
       smes[0].size = sizeof(uint32_t);
       smes[0].offset = 0;
@@ -360,14 +354,14 @@ bool PipelineManager::make_comp_pipes() noexcept {
 
       si.mapEntryCount = static_cast<uint32_t>(smes.size());
       si.pMapEntries = smes.data();
-      si.dataSize = sizeof(uint32_t) * pipe.local_workgrp_size->size();
-      si.pData = pipe.local_workgrp_size->data();
+      si.dataSize = sizeof(uint32_t) * pipe.comp_req.local_workgrp->size();
+      si.pData = pipe.comp_req.local_workgrp->data();
 
       LOG.info("compute pipeline '{}' has specialized its workgroups to "
         "({}, {}, {})", pipe.name,
-        pipe.local_workgrp_size->at(0),
-        pipe.local_workgrp_size->at(1),
-        pipe.local_workgrp_size->at(2));
+        pipe.comp_req.local_workgrp->at(0),
+        pipe.comp_req.local_workgrp->at(1),
+        pipe.comp_req.local_workgrp->at(2));
       cpci.stage.pSpecializationInfo = &si;
     }
 
@@ -377,9 +371,6 @@ bool PipelineManager::make_comp_pipes() noexcept {
       return false;
     }
     LOG.info("created compute pipeline '{}'", pipe.name);
-
-    pipe.desc_set_layout.desc_pool_sizes =
-      make_desc_pool_sizes(pipe.desc_set_layout.layout_binds);
   }
 
   return true;
@@ -402,10 +393,6 @@ void PipelineManager::drop_graph_pipes() noexcept {
       vkDestroyDescriptorSetLayout(
         ctxt->dev, pipe.desc_set_layout.desc_set_layout, nullptr);
       pipe.desc_set_layout.desc_set_layout = VK_NULL_HANDLE;
-    }
-    if (pipe.framebuf) {
-      vkDestroyFramebuffer(ctxt->dev, pipe.framebuf, nullptr);
-      pipe.framebuf = VK_NULL_HANDLE;
     }
   }
   LOG.info("dropped all {} graphics pipelines", graph_pipes.size());
@@ -443,11 +430,11 @@ DescriptorSet::DescriptorSet(
 
 bool DescriptorSet::make() noexcept {
   if (desc_pool) { return true; }
+
   VkDescriptorPoolCreateInfo dpci {};
   dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   dpci.maxSets = 1;
-  dpci.poolSizeCount =
-    static_cast<uint32_t>(desc_set_layout->desc_pool_sizes.size());
+  dpci.poolSizeCount = (uint32_t)desc_set_layout->desc_pool_sizes.size();
   dpci.pPoolSizes = desc_set_layout->desc_pool_sizes.data();
 
   if (L_VK <- vkCreateDescriptorPool(ctxt->dev, &dpci, nullptr, &desc_pool)) {
@@ -479,8 +466,8 @@ DescriptorSet::~DescriptorSet() noexcept { drop(); }
 DescriptorSet::DescriptorSet(DescriptorSet&& right) noexcept :
   ctxt(right.ctxt),
   desc_set_layout(right.desc_set_layout),
-  desc_pool(right.desc_pool),
-  desc_set(right.desc_set) {}
+  desc_pool(std::exchange(right.desc_pool, nullptr)),
+  desc_set(std::exchange(right.desc_set, nullptr)) {}
 
 DescriptorSet& DescriptorSet::write(
   uint32_t bind_pt, const BufferSlice& buf_slice,
@@ -522,6 +509,7 @@ Framebuffer::Framebuffer(
   L_STATIC Span<const ImageView*> attaches,
   VkExtent2D extent, uint32_t nlayer) noexcept :
   ctxt(&ctxt),
+  pass(&pass),
   req({ attaches, extent, nlayer }),
   framebuf(VK_NULL_HANDLE) {}
 bool Framebuffer::make() noexcept {
@@ -562,6 +550,6 @@ Framebuffer::Framebuffer(Framebuffer&& rv) noexcept :
   ctxt(rv.ctxt),
   pass(rv.pass),
   req(rv.req),
-  framebuf(std::exchange(rv.framebuf, VK_NULL_HANDLE)) {}
+  framebuf(std::exchange(rv.framebuf, nullptr)) {}
 
 L_CUVK_END_

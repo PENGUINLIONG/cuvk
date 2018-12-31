@@ -371,8 +371,9 @@ CommandRecorder& CommandRecorder::dispatch(
 CommandRecorder& CommandRecorder::draw(
   const GraphicsPipeline& graph_pipe,
   std::optional<const DescriptorSet*> desc_set,
-  const BufferSlice& vert_buf, uint32_t nvert) noexcept {
-  auto viewport = graph_pipe.attach->img_slice.img_alloc->req.extent;
+  const BufferSlice& vert_buf, uint32_t nvert,
+  const Framebuffer& framebuf) noexcept {
+  auto viewport = framebuf.req.extent;
 
   if (status != CommandRecorderStatus::OnAir) {
     LOG.warning("command buffer recording is not started");
@@ -382,8 +383,8 @@ CommandRecorder& CommandRecorder::draw(
 
   VkRenderPassBeginInfo rpbi {};
   rpbi.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-  rpbi.renderPass = graph_pipe.pass;
-  rpbi.framebuffer = graph_pipe.framebuf;
+  rpbi.renderPass = framebuf.pass->pass;
+  rpbi.framebuffer = framebuf.framebuf;
   rpbi.renderArea.extent = viewport;
   rpbi.clearValueCount = static_cast<uint32_t>(cv.size());
   rpbi.pClearValues = cv.data();
@@ -391,8 +392,8 @@ CommandRecorder& CommandRecorder::draw(
   vkCmdBeginRenderPass(exec->cmd_buf, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 
   VkViewport v {};
-  v.width = static_cast<float>(viewport.width);
-  v.height = static_cast<float>(viewport.height);
+  v.width = (float)viewport.width;
+  v.height = (float)viewport.height;
   v.minDepth = 0.;
   v.maxDepth = 1.;
 

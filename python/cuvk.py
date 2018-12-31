@@ -51,8 +51,7 @@ class MemoryRequirements(Structure):
                 ('nbac', c_uint),
                 ('nuniv', c_uint),
                 ('width', c_uint),
-                ('height', c_uint),
-                ('share_bac', c_uint)]
+                ('height', c_uint)]
 
 class DeformationInvocation(Structure):
     _fields_ = [('deform_specs', POINTER(DeformSpecs)),
@@ -71,7 +70,7 @@ class DeformationInvocation(Structure):
 
         self.nbac = len(bacs)
         self.bacs_buf = (Bacterium * self.nbac)()
-        for i in range(self.nspec):
+        for i in range(self.nbac):
             self.bacs_buf[i] = bacs[i]
         self.bacs = cast(self.bacs_buf, POINTER(Bacterium))
 
@@ -84,17 +83,22 @@ class DeformationInvocation(Structure):
 class EvaluationInvocation(Structure):
     _fields_ = [('bacs', POINTER(Bacterium)),
                 ('nbac', c_uint),
+                ('width', c_uint),
+				('height', c_uint),
                 ('sim_univs', POINTER(c_float)),
                 ('real_univ', POINTER(c_float)),
                 ('nsim_univ', c_uint),
                 ('base_sim_univ', c_uint),
                 ('costs', POINTER(c_float))]
-    def __init__(self, bacs, real_univ, base_sim_univ, nsim_univ):
+    def __init__(self, bacs, width, height, real_univ, base_sim_univ, nsim_univ):
         self.nbac = len(bacs)
         self.bacs_buf = (Bacterium * self.nbac)()
         for i in range(self.nbac):
             self.bacs_buf[i] = bacs[i]
         self.bacs = cast(self.bacs_buf, POINTER(Bacterium))
+
+        self.width = width
+        self.height = height
 
         univ_size = len(real_univ)
 
@@ -211,10 +215,10 @@ class Context:
         invoke = DeformationInvocation(specs, bacs, base_univ, nuniv)
         return DeformationTask(self, invoke)
 
-    def eval(self, bacs, real_univ, base_sim_univ, nsim_univ):
+    def eval(self, bacs, width, height, real_univ, base_sim_univ, nsim_univ):
         """
         Dispatch evaluation task
         """
-        invoke = EvaluationInvocation(bacs, real_univ, base_sim_univ, nsim_univ)
+        invoke = EvaluationInvocation(bacs, width, height, real_univ, base_sim_univ, nsim_univ)
         return EvaluationTask(self, invoke)
 

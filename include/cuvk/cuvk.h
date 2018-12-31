@@ -128,8 +128,8 @@ L_EXPORT void L_STDCALL cuvkEnumeratePhysicalDevices(
 struct CuvkMemoryRequirements {
   // Number of deformation specifications.
   CuvkSize nspec;
-  // Number of bacteria input per batch. The bacteria output will have size
-  // `nspecs * nbac`.
+  // Number of bacteria input per batch. The bacteria output in deformation
+  // tasks and input in evaluation tasks will have size `nspecs * nbac`.
   CuvkSize nbac;
   // Number of universes to be renderd in one batch. This number will also be
   // the length of cost output.
@@ -138,24 +138,16 @@ struct CuvkMemoryRequirements {
   CuvkSize width;
   // Height of the simulated and the real universes.
   CuvkSize height;
-  // Share bacteria output buffer in the deformation stage with the evaluation
-  // stage, to be the vertex buffer. If enabled, you *must not* dispatch deform
-  // works and eval works at the same time. But deformed bacteria output will be
-  // directly visible to the evaluation stage without transfer.
-  CuvkBool shareBacteriaBuffer;
 };
 L_EXPORT CuvkResult L_STDCALL cuvkCreateContext(
   CuvkSize physicalDeviceIndex,
-  L_INOUT CuvkMemoryRequirements memoryRequirements,
+  L_INOUT CuvkMemoryRequirements* memoryRequirements,
   L_OUT CuvkContext* pContext
 );
 //
 // Fails when:
 // - The device is unable to fulfill the memory requirements.
 //
-// Since the number of universes that can be drawn in one batch is restricted by
-// the number of layers the device can hold in one texture array object. The
-// field `nuniv` *might* be adjusted to suit the limits of devices.
 //
 // ### 7.3 Context Destruction
 //
@@ -234,6 +226,14 @@ struct CuvkEvaluationInvocation {
   const void* pBacs;
   // Number of bacteria in `pBacs`.
   CuvkSize nBac;
+  // Width of the simulated and the real universes. Must use the same value as
+  // that used to create CUVK context, otherwise it will lead to undefined
+  // behavior.
+  CuvkSize width;
+  // Height of the simulated and the real universes. Must use the same value as
+  // that used to create CUVK context, otherwise it will lead to undefined
+  // behavior.
+  CuvkSize height;
   // Simulated universes.
   L_OUT void* pSimUnivs;
   // Real universe.

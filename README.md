@@ -6,6 +6,25 @@ CellUniverse Vulkan implementation. This distribution is used to accelerate cell
 
 **CUVK is still in progress.** The current implementation is constrained by the capability of compute devices. Future works will aim at providing work-arounds under the limits of the device when viable.
 
+## Performance
+
+The Python demo program (Release build) produced the following result on _my machine_:
+
+|Run#|Deformation|Evaluation|
+|----|-----------|----------|
+|1   |7.801ms    |3323.127ms|
+|2   |2.774ms    |2126.258ms|
+|3   |9.403ms    |2625.496ms|
+|4   |2.641ms    |3187.679ms|
+|5   |2.955ms    |3588.230ms|
+
+NOTE: _my machine_ is defined as following:
+
+|CPU |Intel Core i7 8650U    |
+|RAM |16GB 1866MHz PDDR3     |
+|GPU |NVIDIA GeForce GTX 1060|
+|GRAM|6GB GDDR5              |
+
 ## C-API
 
 CUVK's raw C-API and detailed documentation is covered in the header file `include/cuvk/cuvk.h`. Language bindings (e.g. for Java) can be created based on the C-API.

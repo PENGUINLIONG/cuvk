@@ -7,30 +7,82 @@
 
 L_CUVK_BEGIN_
 
-struct Context;
-
-// Host memory view.
-struct HostInputMemoryView;
-struct HostOutputMemoryView;
-// Device memory view.
-struct DeviceMemorySlice;
-// Requirements.
-struct BufferAllocationRequirements;
-struct ImageAllocationRequirements;
-// Allocations.
-struct BufferAllocation;
-struct BufferSlice;
-struct ImageAllocation;
-// Views.
-struct BufferView;
-struct ImageView;
-// Heap manager.
-struct HeapManager;
-
-
+template<typename TSize>
+struct RawSlice;
+template<typename TSize>
+struct Sizer;
+using ImageSizer = Sizer<uint32_t>;
+using BufferSizer = Sizer<VkDeviceSize>;
 
 enum class MemoryVisibility {
   Invisible, DeviceOnly, HostVisible,
+};
+
+struct HostInputMemoryView;
+struct HostOutputMemoryView;
+
+struct HeapAllocation;
+struct DeviceMemorySlice;
+
+struct BufferAllocationRequirements;
+struct BufferAllocation;
+struct ImageAllocationRequirements;
+struct ImageAllocation;
+struct HeapManager;
+
+struct BufferSlice;
+struct BufferView;
+struct ImageSlice;
+struct ImageView;
+
+
+
+
+
+
+
+
+
+
+namespace detail {
+  template<typename TSize>
+  constexpr TSize align(TSize size, TSize alignment) {
+    return (size + alignment - 1) / alignment * alignment;
+  }
+}
+
+// External dependency.
+struct Context;
+
+
+
+template<typename TSize>
+struct RawSlice {
+  TSize offset;
+  TSize size;
+};
+using RawImageSlice = RawSlice<uint32_t>;
+using RawBufferSlice = RawSlice<VkDeviceSize>;
+template<typename TSize>
+struct Sizer {
+private:
+  TSize _offset = 0;
+
+public:
+  // Prepare space for `size` aligned.
+  template<typename TElem = uint8_t>
+  RawSlice<TSize> allocate(TSize size, TSize alignment = 1) {
+    auto offset = _offset;
+    size = detail::align<TSize>(size * sizeof(TElem), alignment);
+    _offset += size;
+    return {
+      offset,
+      size,
+    };
+  }
+  operator TSize() const {
+    return _offset;
+  }
 };
 
 
@@ -63,7 +115,7 @@ struct DeviceMemorySlice {
   bool fetch(L_OUT void* data, size_t size) const noexcept;
   // Wipe out the memory with 0.
   bool wipe() const noexcept;
-private:
+
   void* map(size_t size) const noexcept;
   void unmap() const noexcept;
 };
@@ -77,6 +129,7 @@ struct BufferSlice {
   VkDeviceSize size;
 
   DeviceMemorySlice dev_mem_view() const noexcept;
+  BufferSlice slice(VkDeviceSize offset, VkDeviceSize size) const noexcept;
 };
 struct ImageSlice {
   const ImageAllocation* img_alloc;
@@ -138,8 +191,10 @@ struct BufferAllocation {
   VkDeviceSize offset;
 
   BufferSlice slice(VkDeviceSize offset, VkDeviceSize size) const noexcept;
+  BufferSlice slice(RawBufferSlice slice) const noexcept;
   BufferView view(
     VkDeviceSize offset, VkDeviceSize size, VkFormat format) const noexcept;
+  BufferView view(RawBufferSlice slice, VkFormat format) const noexcept;
 };
 
 
@@ -162,8 +217,10 @@ struct ImageAllocation {
 
   ImageSlice slice(
     uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept;
+  ImageSlice slice(RawImageSlice raw_slice, bool is_array) const noexcept;
   ImageView view(
     uint32_t base_layer, std::optional<uint32_t> nlayer) const noexcept;
+  ImageView view(RawImageSlice raw_slice, bool is_array) const noexcept;
 };
 
 
@@ -207,6 +264,5 @@ private:
   bool bind_bufs() noexcept;
   bool bind_imgs() noexcept;
 };
-
 
 L_CUVK_END_

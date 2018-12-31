@@ -107,7 +107,7 @@ struct CommandRecorder {
     const ImageSlice& src, const BufferSlice& dst) noexcept;
   CommandRecorder& copy_img_to_img(
     const ImageSlice& src, const ImageSlice& dst) noexcept;
-  
+
   CommandRecorder& push_const(
     const ComputePipeline& comp_pipe,
     uint32_t dst_offset, uint32_t size,
@@ -124,7 +124,8 @@ struct CommandRecorder {
   CommandRecorder& draw(
     const GraphicsPipeline& graph_pipe,
     std::optional<const DescriptorSet*> desc_set,
-    const BufferSlice& vert_buf, uint32_t nvert) noexcept;
+    const BufferSlice& vert_buf, uint32_t nvert,
+    const Framebuffer& framebuf) noexcept;
 };
 
 struct Executable {
