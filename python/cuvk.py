@@ -33,7 +33,7 @@ class DeformSpecs(Structure):
                 ('_pad0', c_int)]
 
     def __repr__(self):
-        return "[translate=(%f, %f), stretch=(%f,%f), rotate=%f]" % (self.translate_x, self.translate_y, self.stretch_length, self.stretch_width, self.rotate)
+        return "[translate=(%f, %f), stretch=(%f,%f), rotate=%f]" % (self.trans_x, self.trans_y, self.stretch_length, self.stretch_width, self.rotate)
 
 class Bacterium(Structure):
     _fields_ = [('x', c_float),
@@ -84,7 +84,7 @@ class EvaluationInvocation(Structure):
     _fields_ = [('bacs', POINTER(Bacterium)),
                 ('nbac', c_uint),
                 ('width', c_uint),
-				('height', c_uint),
+                ('height', c_uint),
                 ('sim_univs', POINTER(c_float)),
                 ('real_univ', POINTER(c_float)),
                 ('nsim_univ', c_uint),

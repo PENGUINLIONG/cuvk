@@ -1,4 +1,5 @@
-from cuvk import *
+from cubl import *
+#from cuvk import *
 import matplotlib.pyplot as plot
 import numpy as np
 
@@ -39,7 +40,7 @@ bacs = []
 for i in range(SPEC_COUNT):
     deform_spec = DeformSpecs()
     deform_spec.trans_x = 0.7*(i%5)/5 - 0.35
-    deform_spec.trans_y = 0.9*(1%3)/5 - 0.45
+    deform_spec.trans_y = 0.9*(1%5)/5 - 0.45
     deform_spec.stretch_length = 1 + 0.3*((i + 1)/60)
     deform_spec.stretch_width = 1 + 0.3*((i + 1)/60)
     deform_spec.rotate = 3.1415926*(i/60)
@@ -49,8 +50,8 @@ for i in range(BAC_COUNT):
     bac = Bacterium()
     bac.length = 0.08
     bac.width = 0.03
-    bac.x = 0.2*(i%2)
-    bac.y = 0.2*(i%3)
+    bac.x = 0.15*(i%5) + 0.25*(i%2)
+    bac.y = 0.15*(i%5) + 0.25*(i%2)
     bac.orient = 3.1415926 * 4 * (i / 60)
     bac.univ = int(i / 10)
     bacs.append(bac)
