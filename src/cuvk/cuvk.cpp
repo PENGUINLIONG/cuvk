@@ -138,7 +138,7 @@ struct CuvkEvalPipeline {
     }),
     push_const_rngs({
       VkPushConstantRange
-      { VK_SHADER_STAGE_GEOMETRY_BIT, 0, 4 },
+      { VK_SHADER_STAGE_GEOMETRY_BIT, 0, 8 },
     }),
 
     vert_binds({
@@ -861,8 +861,12 @@ namespace evaluation {
     auto& limits = task.cuvk.ctxt.req.phys_dev_info->phys_dev_props.limits;
     auto bacs = reinterpret_cast<const Bacterium*>(invoke.pBacs);
 
-    std::array<uint32_t, 1> eval_meta {
-      invoke.baseUniv, // This will be added with `invoke` for multiple times.
+    struct {
+      uint32_t base_univ; // This will be added with `invoke` for multiple times.
+      float ratio;
+    } eval_meta {
+      invoke.baseUniv,
+      (float)invoke.width / (float)invoke.height,
     };
 
     rec
@@ -904,14 +908,14 @@ namespace evaluation {
         // Draw simulated cell universes.
         .push_const(task.cuvk.pipes.eval_pipe.pipe,
           VK_SHADER_STAGE_GEOMETRY_BIT,
-          0, (uint32_t)eval_meta.size() * sizeof(uint32_t), eval_meta.data())
+          0, sizeof(eval_meta), &eval_meta)
         .draw(task.cuvk.pipes.eval_pipe.pipe, {},
           allocs.bacs.slice(bacs_offset, nbac), nbac, framebuf)
         .copy_img_to_buf(allocs.sim_univs_temp_entire, allocs.sim_univs);
 
       // Update states.
       bacs_offset = bacs_pos;
-      eval_meta[0] = univ_pos;
+      eval_meta.base_univ = univ_pos;
     }
     rec
       // -----------------------------------------------------------------------

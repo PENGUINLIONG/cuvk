@@ -65,13 +65,16 @@ out; // out vec2 gl_Position;
 layout(std430, push_constant) uniform EvalMeta {
   // The index of the first universe.
   uint BASE_UNIV;
+  // The ratio of width to height.
+  float RATIO;
 };
 //L
 
 
 
 vec4 calc_pos(mat2 rotate, vec2 orig, vec2 offset) {
-  return vec4((rotate * orig) + offset, 0.0, 1.0);
+  vec2 pos = (rotate * orig) + offset;
+  return vec4(pos.x / RATIO, pos.y, 0.0, 1.0);
 }
 
 void main() {
