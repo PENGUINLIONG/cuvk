@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 project(cuvk LANGUAGES CXX VERSION 0.0.1)
 
-find_package(vulkan REQUIRED)
-find_package(png REQUIRED)
+find_package(Vulkan REQUIRED)
+find_package(PNG REQUIRED)
 
 message("Project 'CUVK':")
 message("           C++: ${CMAKE_CXX_COMPILER}")
