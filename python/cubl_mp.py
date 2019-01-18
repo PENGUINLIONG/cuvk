@@ -2,7 +2,8 @@ from cv2 import cv2
 import numpy as np
 from math import sin, cos, pi
 import time
-from sys import stderr
+from multiprocessing import cpu_count
+from multiprocessing.pool import Pool
 # CUBL for CellUniverse Baseline.
 #
 # This module implement all same APIs as CUVK but barely in Python. Algorithms
@@ -10,10 +11,15 @@ from sys import stderr
 # acceleration performance. The deformation task is likely to be less time-
 # consuming than the original impl.
 
+POOL = None
 def init():
-    pass
+    global POOL
+    POOL = Pool(max(cpu_count() // 2, 1))
 def deinit():
-    pass
+    global POOL
+    POOL.close()
+    POOL.join()
+    POOL = None
 
 class DeformSpecs:
     def __init__(self):
@@ -87,58 +93,58 @@ class DeformationTask(Task):
         super().__init__(ctxt, self.proc, invoke)
     def proc(self, invoke):
         beg = time.clock()
-        rv = [deform_cell(bac, spec, idx, invoke.base_univ, invoke.nuniv) for idx, spec in enumerate(invoke.specs) for bac in invoke.bacs]
+        args = [(bac, spec, idx, invoke.base_univ, invoke.nuniv) for idx, spec in enumerate(invoke.specs) for bac in invoke.bacs]
+        rv = POOL.starmap(deform_cell, args)
         end = time.clock()
-        print("deformation task takes %f" % ((end - beg) * 1000), file=stderr, end='\r\n')
+        print("deformation task takes %f" % ((end - beg) * 1000))
         return rv
 
     def result(self):
         return self._result
 
 
-def generate_image_cv2(bacs, sim_univs, base_univ, nuniv, univ_width, univ_height):
-    for bac in bacs:
-        univ = sim_univs[bac.univ - base_univ]
-        mn = min(univ_width, univ_height)
-        length = bac.length * mn / 2
-        width = bac.width * mn / 2
-        bac_x = (bac.x * mn + univ_width) / 2
-        bac_y = (bac.y * mn + univ_height) / 2
+def generate_image_cv2(bac, sim_univs, base_univ, nuniv, univ_width, univ_height):
+    univ = sim_univs[bac.univ - base_univ]
+    mn = min(univ_width, univ_height)
+    length = bac.length * mn / 2
+    width = bac.width * mn / 2
+    bac_x = (bac.x * mn + univ_width) / 2
+    bac_y = (bac.y * mn + univ_height) / 2
 
-        x = bac_x - length*cos(bac.orient)
-        y = bac_y + length*sin(bac.orient)
-        head_pos = np.array([x, y, 0])
+    x = bac_x - length*cos(bac.orient)
+    y = bac_y + length*sin(bac.orient)
+    head_pos = np.array([x, y, 0])
 
-        end_point_1 = np.array([x + width*cos(bac.orient - pi/2),
-                                     y - width*sin(bac.orient - pi/2), 0])
-        end_point_2 = np.array([x - width*cos(bac.orient - pi/2),
-                                     y + width*sin(bac.orient - pi/2), 0])
+    end_point_1 = np.array([x + width*cos(bac.orient - pi/2),
+                            y - width*sin(bac.orient - pi/2), 0])
+    end_point_2 = np.array([x - width*cos(bac.orient - pi/2),
+                            y + width*sin(bac.orient - pi/2), 0])
 
-        x = bac_x + length*cos(bac.orient)
-        y = bac_y - length*sin(bac.orient)
-        tail_pos = np.array([x, y, 0])
+    x = bac_x + length*cos(bac.orient)
+    y = bac_y - length*sin(bac.orient)
+    tail_pos = np.array([x, y, 0])
 
-        end_point_3 = np.array([x - width*cos(bac.orient - pi/2),
-                                     y + width*sin(bac.orient - pi/2), 0])
-        end_point_4 = np.array([x + width*cos(bac.orient - pi/2),
-                                     y - width*sin(bac.orient - pi/2), 0])
+    end_point_3 = np.array([x - width*cos(bac.orient - pi/2),
+                                    y + width*sin(bac.orient - pi/2), 0])
+    end_point_4 = np.array([x + width*cos(bac.orient - pi/2),
+                                    y - width*sin(bac.orient - pi/2), 0])
 
-        # head and tail
-        cv2.circle(univ, tuple(head_pos[:2].astype(int)),
-                   int(width), 1, -1)
-        cv2.circle(univ, tuple(tail_pos[:2].astype(int)),
-                   int(width), 1, -1)
+    # head and tail
+    cv2.circle(univ, tuple(head_pos[:2].astype(int)),
+               int(width), 1, -1)
+    cv2.circle(univ, tuple(tail_pos[:2].astype(int)),
+               int(width), 1, -1)
 
-        # body
-        points = [tuple(end_point_1[:2]),
-                  tuple(end_point_2[:2]),
-                  tuple(end_point_3[:2]),
-                  tuple(end_point_4[:2])]
-        points = np.array([(int(point[0]), int(point[1])) for point in points])
-        cv2.fillConvexPoly(univ, points, 1, 1)
+    # body
+    points = [tuple(end_point_1[:2]),
+              tuple(end_point_2[:2]),
+              tuple(end_point_3[:2]),
+              tuple(end_point_4[:2])]
+    points = np.array([(int(point[0]), int(point[1])) for point in points])
+    cv2.fillConvexPoly(univ, points, 1, 1)
 
-def calc_costs(sim_univs, real_univ):
-    return [np.sum(sim_univs[i].flatten() - real_univ) for i in range(sim_univs.shape[0])]
+def calc_costs(sim_univ, real_univ):
+    return np.sum(sim_univ - real_univ)
 
 class EvaluationTask(Task):
     def __init__(self, ctxt, invoke):
@@ -147,10 +153,12 @@ class EvaluationTask(Task):
         beg = time.clock()
         sim_univs = np.zeros((invoke.nsim_univ, invoke.height, invoke.width),
                              dtype=np.float)
-        generate_image_cv2(invoke.bacs, sim_univs, invoke.base_sim_univ, invoke.nsim_univ, invoke.width, invoke.height)
-        costs = calc_costs(sim_univs, invoke.real_univ)
+        args = [(bac, sim_univs, invoke.base_sim_univ, invoke.nsim_univ, invoke.width, invoke.height) for bac in invoke.bacs]
+        POOL.starmap(generate_image_cv2, args)
+        args = [(sim_univs[i].flatten(), invoke.real_univ) for i in range(sim_univs.shape[0])]
+        costs = POOL.starmap(calc_costs, args)
         end = time.clock()
-        print("evaluation task takes %f" % ((end - beg) * 1000), file=stderr, end='\r\n')
+        print("evaluation task takes %f" % ((end - beg) * 1000))
         return (sim_univs, costs)
 
     def result(self):

@@ -72,7 +72,7 @@ ShaderManager::ShaderManager(ShaderManager&& right) :
 std::optional<DescriptorSet> GraphicsPipeline::desc_set() noexcept {
   DescriptorSet rv(*ctxt, desc_set_layout);
   if (rv.make()) {
-    return rv;
+    return std::make_optional(std::move(rv));
   } else {
     return {};
   }
@@ -82,7 +82,7 @@ std::optional<Framebuffer> GraphicsPipeline::framebuf(
   VkExtent2D extent, uint32_t nlayer) noexcept {
   Framebuffer rv(*ctxt, pass, attaches, extent, nlayer);
   if (rv.make()) {
-    return rv;
+    return std::make_optional(std::move(rv));
   } else {
     return {};
   }
@@ -91,7 +91,7 @@ std::optional<Framebuffer> GraphicsPipeline::framebuf(
 std::optional<DescriptorSet> ComputePipeline::desc_set() noexcept {
   DescriptorSet rv(*ctxt, desc_set_layout);
   if (rv.make()) {
-    return rv;
+    return std::make_optional(std::move(rv));
   } else {
     return {};
   }

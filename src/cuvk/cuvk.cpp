@@ -505,7 +505,9 @@ struct Cuvk {
   CuvkAllocations allocs;
 
   // We can't submit queues asynchronously.
-  std::mutex submit_sync;
+  std::mutex deform_send_sync, deform_fetch_sync,
+   eval_send_sync, eval_fetch_sync,
+   submit_sync;
   
   Cuvk(const PhysicalDeviceInfo& phys_dev_info,
     const CuvkMemoryRequirements& mem_req) :

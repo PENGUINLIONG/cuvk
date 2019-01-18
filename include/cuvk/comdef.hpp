@@ -21,7 +21,7 @@
 #define L_STATIC
 
 #ifdef NDEBUG
-#define L_DEBUG false;
+#define L_DEBUG false
 #else
-#define L_DEBUG true;
+#define L_DEBUG true
 #endif

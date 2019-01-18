@@ -16,12 +16,21 @@
 // All exported CUVK functions use the standard call convention as normal stack
 // behavior.
 //
+#ifndef _MSC_VER
+#define __declspec(x)
+#endif
+
 #ifdef L_CUVK_COMPILE
 #define L_EXPORT extern "C" __declspec(dllexport)
 #else
 #define L_EXPORT extern "C" __declspec(dllimport)
-#endif 
+#endif
+
+#ifdef _MSC_VER
 #define L_STDCALL __stdcall
+#else
+#define L_STDCALL __attribute__((stdcall))
+#endif
 //
 // ### 1.2 Function parameters
 //

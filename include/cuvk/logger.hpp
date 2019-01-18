@@ -32,6 +32,7 @@ class VkCheck;
 
 namespace detail {
   void log_thread_main(Logger& logger);
+  void log(std::mutex sync);
 }
 using LogLevel = const char*;
 class Logger {
@@ -72,15 +73,8 @@ public:
     LogMessage m = {
       level,
       std::chrono::high_resolution_clock::now(),
-      fmt::format(msg, args ...)
+      sizeof...(args) == 0 ? msg : fmt::format(msg, args ...)
     };
-    _msgs.emplace(m);
-  }
-  template<>
-  void log(const LogLevel level,
-    const std::string& msg) {
-    std::scoped_lock lk(_sync);
-    LogMessage m = { level, std::chrono::high_resolution_clock::now(), msg };
     _msgs.emplace(m);
   }
   template<typename ... TArgs>

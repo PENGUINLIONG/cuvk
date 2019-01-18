@@ -8,22 +8,50 @@ CellUniverse Vulkan implementation. This distribution is used to accelerate cell
 
 ## Performance
 
-The Python demo program (Release build) produced the following result on _my machine_:
+The Python demo program (Release build) produced the following result on _my machine_, compared with the adapted CPU-based implementation:
 
-|Run#|Deformation|Evaluation|
-|----|-----------|----------|
-|1   |7.801ms    |3323.127ms|
-|2   |2.774ms    |2126.258ms|
-|3   |9.403ms    |2625.496ms|
-|4   |2.641ms    |3187.679ms|
-|5   |2.955ms    |3588.230ms|
+### Deformation
+
+|Run#      |Baseline (ms)|CUVK (ms)|%Reduction|
+|----------|-------------|---------|----------|
+|0         |       13.752|    2.426|      82.4|
+|1         |       13.159|    2.534|      80.7|
+|2         |       16.747|    5.942|      64.5|
+|3         |       16.451|    5.076|      69.1|
+|4         |       13.140|    2.781|      78.8|
+|5         |       13.886|    5.267|      62.1|
+|6         |       13.067|    5.512|      57.8|
+|7         |       13.266|    5.469|      58.8|
+|8         |       13.364|    5.343|      60.0|
+|9         |       14.516|    2.463|      83.0|
+|**Median**|   **13.558**|**5.172**|  **61.9**|
+
+### Evaluation
+
+|Run#      |Baseline (ms)|CUVK (ms)   |%Reduction|
+|----------|-------------|------------|----------|
+|0         |    10117.638|    2837.001|      72.0|
+|1         |     8291.345|    2267.195|      72.6|
+|2         |     8286.471|    2315.688|      72.1|
+|3         |     8356.441|    2252.020|      73.1|
+|4         |     8386.348|    2284.402|      72.8|
+|5         |     8289.388|    2230.294|      73.1|
+|6         |     8403.162|    2238.656|      73.4|
+|7         |     8395.716|    2287.414|      72.8|
+|8         |     8387.057|    2246.775|      73.2|
+|9         |     8289.592|    2192.331|      73.6|
+|**Median**| **8371.395**|**2259.608**|  **73.0**|
+
+### How to Reproduce
+
+A handy PowerShell script `scripts/Run-Benchmark.ps1` can be used to reproduce the result. Notice that the CPU-based algorithm is adapted to mock the API of CUVK. This can make the baseline different from the original implementation.
 
 NOTE: _my machine_ is defined as following:
 
-|CPU |Intel Core i7 8650U    |
-|RAM |16GB 1866MHz PDDR3     |
-|GPU |NVIDIA GeForce GTX 1060|
-|GRAM|6GB GDDR5              |
+* CPU: Intel Core i7 8650U
+* RAM: 16GB 1866MHz PDDR3
+* GPU: NVIDIA GeForce GTX 1060
+* GRAM: 6GB GDDR5
 
 ## C-API
 

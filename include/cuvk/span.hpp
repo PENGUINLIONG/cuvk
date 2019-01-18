@@ -1,5 +1,6 @@
 #pragma once
 #include "cuvk/comdef.hpp"
+#include "cuvk/logger.hpp"
 
 L_CUVK_BEGIN_
 
